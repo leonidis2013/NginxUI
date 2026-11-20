@@ -227,3 +227,16 @@ tr.click:hover td { background: var(--panel2); }
 .span2 { grid-column: span 2; }
 @media (min-width: 761px) { .app { background: linear-gradient(90deg, var(--panel) 220px, var(--bg) 220px); } }
 @media (max-width: 760px) { .span2 { grid-column: auto; } }
+/* updates flow */
+.updflow { max-width: 860px; }
+.opt { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; cursor: pointer; }
+.opt:hover { border-color: #3a4552; }
+.opt:has(input:checked) { border-color: var(--accent2); background: rgba(62,198,168,.07); }
+.opt input { accent-color: var(--accent); }
+.opt small { display: block; color: var(--muted); }
+.opt.off { opacity: .45; cursor: default; }
+.opt .grow { flex: 1; }
+details.card summary { cursor: pointer; list-style: none; }
+details.card summary::-webkit-details-marker { display: none; }
+details.card summary::before { content: "▸ "; color: var(--muted); }
+details.card[open] summary::before { content: "▾ "; }

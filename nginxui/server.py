@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import nginxconf  # noqa: E402
 import stats  # noqa: E402
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
 CONFIG_PATH = os.environ.get("NGINXUI_CONFIG", "/etc/nginxui/nginxui.json")

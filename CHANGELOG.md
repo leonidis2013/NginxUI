@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.0.2 — 2026-11-20
+- Updates page redesigned as one top-to-bottom flow: status with one check button, a single "choose what to install" list (security fixes picked by default) with one Install button, progress shown in place, package list folded away, server info and automatic updates at the bottom
+
 ## 1.0.1 — 2026-11-20
 - Renamed the app from LiveProxy to NginxUI (service `nginxui`, files in /opt/nginxui, /etc/nginxui, /var/lib/nginxui)
 

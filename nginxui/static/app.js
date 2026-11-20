@@ -797,37 +797,63 @@ async function pgUpdates() {
   const d = await api("/api/updates");
   const sy = d.system, np = d.nginx_pkg, pk = d.packages || [];
   const sec = pk.filter((p) => p.security).length, ngx = pk.filter((p) => p.nginx).length;
-  const ngUpd = np.installed && np.candidate && np.installed !== np.candidate && np.installed !== "(none)";
-  $("#pactions").innerHTML = d.allowed ? `<button class="btn" data-act="updCheck">Check for updates</button>` : "";
-  $("#page").innerHTML = `${!d.allowed ? `<div class="banner warn">System updates are turned off in the NginxUI config file (allow_system_updates).</div>` : ""}
-    ${sy.reboot_required ? `<div class="banner warn row between"><span><b>Reboot required</b> to finish installing updates${sy.reboot_pkgs.length ? ` (${esc(sy.reboot_pkgs.join(", "))})` : ""}. Sites are offline for a minute or two while it restarts.</span><button class="btn danger" data-act="reboot">Reboot server</button></div>` : ""}
-    <div class="grid g3">
-      <div class="card"><h3>Ubuntu</h3><dl class="kv small"><dt>System</dt><dd>${esc(sy.os)}</dd><dt>Kernel</dt><dd>${esc(sy.kernel)}</dd><dt>Uptime</dt><dd>${fmtDur(sy.uptime_s)}</dd><dt>Last check</dt><dd>${esc(d.checked || "never")}</dd></dl>
-        <div class="spacer"></div><div class="row between"><div><b>Automatic security updates</b><div class="small muted">${d.auto.installed ? "Ubuntu installs security fixes daily on its own" : "unattended-upgrades is not installed"}</div></div>
-        <label class="toggle"><input type="checkbox" data-chg="autoUpd" ${d.auto.enabled ? "checked" : ""} ${d.auto.installed && d.allowed ? "" : "disabled"}><span></span></label></div></div>
-      <div class="card"><h3>nginx</h3><dl class="kv small"><dt>Running</dt><dd>${esc(sy.nginx_version || "-")}</dd><dt>Installed pkg</dt><dd class="mono">${esc(np.installed || "-")}</dd><dt>Newest available</dt><dd class="mono">${esc(np.candidate || "-")}</dd><dt>From</dt><dd class="small">${esc(np.source || "-")}</dd></dl>
-        <div class="spacer"></div>${ngUpd ? `<span class="badge info">update available</span> ` : `<span class="badge good">up to date</span> `}
-        <button class="btn sm" data-act="updApply" data-scope="nginx" ${ngUpd && d.allowed ? "" : "disabled"}>Update nginx only</button></div>
-      <div class="card"><h3>Waiting updates</h3><div class="stat"><div class="v">${pk.length}</div><div class="s">${sec} security · ${ngx} nginx</div></div><div class="spacer"></div>
-        <div class="row"><button class="btn ${sec ? "primary" : ""}" data-act="updApply" data-scope="security" ${sec && d.allowed ? "" : "disabled"}>Install security (${sec})</button><button class="btn" data-act="updApply" data-scope="all" ${pk.length && d.allowed ? "" : "disabled"}>Install all (${pk.length})</button></div></div>
-    </div><div class="spacer"></div>
-    <div class="card hidden" id="jobCard"><div class="row between"><h3 id="jobTitle" style="margin:0"></h3><span id="jobState"></span></div><div class="spacer"></div><div class="out console" id="jobOut"></div></div>
+  const running = d.job && !d.job.done;
+  const counts = { security: sec, nginx: ngx, all: pk.length };
+  // default to security fixes whenever there are some; keep the person's own pick otherwise
+  if (!pk.length) S.updScope = null;
+  else if (!S.updScope || !counts[S.updScope]) S.updScope = sec ? "security" : ngx ? "nginx" : "all";
+
+  // 1. status
+  let head, sub, dot;
+  if (!d.checked) { head = "Not checked yet"; sub = "Check to see what Ubuntu has waiting for this server."; dot = ""; }
+  else if (!pk.length) { head = "Up to date"; sub = `Last checked ${esc(d.checked)}`; dot = "good"; }
+  else { head = `${pk.length} update${pk.length > 1 ? "s" : ""} waiting`; sub = `${sec ? `<b style="color:#ff8f8f">${sec} security</b> · ` : ""}${ngx ? `${ngx} nginx · ` : ""}last checked ${esc(d.checked)}`; dot = sec ? "bad" : "warn"; }
+  const checkBtn = d.allowed ? `<button class="btn ${pk.length ? "" : "primary"} upd-act" data-act="updCheck">${d.checked ? "Check again" : "Check for updates"}</button>` : "";
+
+  // 2. choice
+  const opt = (scope, title, desc) => `<label class="opt ${counts[scope] ? "" : "off"}"><input type="radio" name="updScope" value="${scope}" data-chg="updScope" ${S.updScope === scope ? "checked" : ""} ${counts[scope] ? "" : "disabled"}>
+    <span class="grow"><b>${title}</b><small>${desc}</small></span><span class="badge">${counts[scope]}</span></label>`;
+  const choose = pk.length && d.allowed ? `<div class="card upd-act"><h3>Choose what to install</h3>
+      ${opt("security", "Security fixes only", "Recommended. Fixes for known problems, lowest risk.")}
+      ${opt("nginx", "nginx only", "Just the web server, nothing else on the system.")}
+      ${opt("all", "Everything", "All waiting Ubuntu updates. May need a reboot afterwards.")}
+      <div class="row between" style="margin-top:14px"><span class="small muted">Your nginx config is backed up first and kept as-is; nginx is tested afterwards.</span>
+      <button class="btn primary" data-act="updApply" id="updGo">Install ${counts[S.updScope]} update${counts[S.updScope] === 1 ? "" : "s"}</button></div></div><div class="spacer"></div>` : "";
+
+  const table = pk.length ? `<details class="card"><summary><h3 style="display:inline">What's waiting</h3> <span class="muted small">${pk.length} package${pk.length > 1 ? "s" : ""} · tap to show</span></summary><div class="spacer"></div>
+      <div class="tablewrap"><table><tr><th>Package</th><th>Current</th><th>New</th><th></th></tr>${pk.sort((a, b) => b.security - a.security || b.nginx - a.nginx || a.name.localeCompare(b.name)).map((p) => `<tr><td class="mono">${esc(p.name)}</td><td class="mono small muted">${esc(p.old)}</td><td class="mono small">${esc(p.new)}</td><td>${p.security ? '<span class="badge bad">security</span>' : ""} ${p.nginx ? '<span class="badge info">nginx</span>' : ""}</td></tr>`).join("")}</table></div></details><div class="spacer"></div>` : "";
+
+  $("#page").innerHTML = `<div class="updflow">
+    ${!d.allowed ? `<div class="banner warn">System updates are turned off in the NginxUI settings file (allow_system_updates).</div>` : ""}
+    ${sy.reboot_required ? `<div class="banner warn row between"><span><b>Restart needed</b> to finish installing updates${sy.reboot_pkgs.length ? ` (${esc(sy.reboot_pkgs.join(", "))})` : ""}. Sites are offline for a minute or two.</span><button class="btn danger upd-act" data-act="reboot">Restart server</button></div>` : ""}
+    <div class="card row between"><div class="row" style="gap:14px;flex-wrap:nowrap;min-width:0"><span class="dot ${dot}" style="width:14px;height:14px;flex:none"></span><div><div style="font-size:20px;font-weight:650">${head}</div><div class="small muted">${sub}</div></div></div>${checkBtn}</div>
     <div class="spacer"></div>
-    <div class="card"><h3>Packages</h3>${pk.length ? `<div class="tablewrap"><table><tr><th>Package</th><th>Current</th><th>New</th><th></th></tr>${pk.sort((a, b) => b.security - a.security || b.nginx - a.nginx || a.name.localeCompare(b.name)).map((p) => `<tr><td class="mono">${esc(p.name)}</td><td class="mono small muted">${esc(p.old)}</td><td class="mono small">${esc(p.new)}</td><td>${p.security ? '<span class="badge bad">security</span>' : ""} ${p.nginx ? '<span class="badge info">nginx</span>' : ""}</td></tr>`).join("")}</table></div>` : `<div class="empty">${d.checked ? "Everything is up to date." : "Press <b>Check for updates</b> to see what's available."}</div>`}</div>
-    <p class="small muted">Before installing, NginxUI backs up /etc/nginx. Your edited config files are always kept (apt is told to keep your versions), and nginx is tested and started again afterwards.</p>`;
-  if (d.job && !d.job.done) followJob(d.job.id);
+    <div class="card hidden" id="jobCard"><div class="row between"><h3 id="jobTitle" style="margin:0"></h3><span id="jobState"></span></div><div class="spacer"></div><div class="out console" id="jobOut"></div></div>
+    ${choose}${table}
+    <div class="card"><h3>This server</h3><div class="grid g2">
+      <dl class="kv small"><dt>Ubuntu</dt><dd>${esc(sy.os)}</dd><dt>Kernel</dt><dd>${esc(sy.kernel)}</dd><dt>Uptime</dt><dd>${fmtDur(sy.uptime_s)}</dd></dl>
+      <dl class="kv small"><dt>nginx</dt><dd>${esc((sy.nginx_version || "-").replace("nginx/", ""))}</dd><dt>Package</dt><dd class="mono">${esc(np.installed || "-")}${np.candidate && np.candidate !== np.installed ? ` → ${esc(np.candidate)}` : ""}</dd><dt>From</dt><dd>${esc(np.source || "-")}</dd></dl></div>
+      <div class="spacer"></div><div class="row between" style="border-top:1px solid var(--line);padding-top:14px"><div><b>Automatic security updates</b><div class="small muted">${d.auto.installed ? "Ubuntu installs security fixes daily on its own" : "Not available: unattended-upgrades is not installed"}</div></div>
+      <label class="toggle"><input type="checkbox" data-chg="autoUpd" ${d.auto.enabled ? "checked" : ""} ${d.auto.installed && d.allowed ? "" : "disabled"}><span></span></label></div></div></div>`;
+  if (running) followJob(d.job.id, () => route());
 }
+CHG.updScope = (el) => {
+  S.updScope = el.value;
+  const n = +el.closest(".opt").querySelector(".badge").textContent;
+  $("#updGo").textContent = `Install ${n} update${n === 1 ? "" : "s"}`;
+};
 CHG.autoUpd = async (el) => { try { await api("/api/updates/auto", { enabled: el.checked }); toast(`Automatic security updates ${el.checked ? "on" : "off"}`); } catch (e) { el.checked = !el.checked; toast(e.message, true); } };
 ACT.updCheck = async () => { try { const r = await api("/api/updates/check", {}); followJob(r.job, () => route()); } catch (e) { toast(e.message, true); } };
-ACT.updApply = async (el) => {
-  const scope = el.dataset.scope;
-  const what = { all: "all waiting updates", security: "security updates", nginx: "the newest nginx" }[scope];
-  if (!(await confirmBox(`Install ${what}?`, `<ol class="small"><li>Back up /etc/nginx</li><li>Install ${what} with apt (your config files are kept)</li><li>Test the nginx config and make sure nginx is running</li></ol><p class="small muted">Sites may blip for a second if nginx restarts. Keep this page open to watch progress - it keeps running if you leave.</p>`, "Install"))) return;
+ACT.updApply = async () => {
+  const scope = S.updScope;
+  const what = { all: "all waiting updates", security: "security fixes", nginx: "the newest nginx" }[scope];
+  if (!(await confirmBox(`Install ${what}?`, `<ol class="small"><li>Back up /etc/nginx</li><li>Install ${what} (your config files are kept)</li><li>Test nginx and make sure it's running</li></ol><p class="small muted">Sites may blip for a second if nginx restarts. It keeps going if you leave this page.</p>`, "Install"))) return;
   try { const r = await api("/api/updates/apply", { scope }); followJob(r.job, () => route()); } catch (e) { toast(e.message, true); }
 };
 function followJob(id, onDone) {
   const card = $("#jobCard"); if (!card) return;
   card.classList.remove("hidden");
+  $$(".upd-act").forEach((el) => el.classList.add("hidden"));
   let since = 0;
   const tick = async () => {
     const j = await api(`/api/job?id=${id}&since=${since}`);
