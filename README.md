@@ -2,7 +2,7 @@
 
 A web UI for an nginx reverse proxy on Ubuntu. Manage configs safely, set up new sites with guided wizards, see where traffic goes, read logs and stats, and keep Ubuntu and nginx up to date — all from a browser.
 
-Version 1.1.0 · runs as a native systemd service · no dependencies beyond the Python 3 that ships with Ubuntu.
+Version 1.2.0 · runs as a native systemd service · no dependencies beyond the Python 3 that ships with Ubuntu.
 
 ## What it does
 
@@ -41,7 +41,7 @@ sudo ./install.sh --no-tls        # plain HTTP on 127.0.0.1 only (put it behind 
 sudo ./install.sh uninstall       # remove the app; keeps settings, history and backups
 ```
 
-**Upgrade:** `git pull` then `sudo ./install.sh` again. Settings, users, history and backups are kept.
+**Updating NginxUI:** open **Updates** and press **Check** next to NginxUI; if there's a new version, press **Update NginxUI**. It pulls from the git clone you installed from, reinstalls and restarts. (By hand: `git pull` then `sudo ./install.sh`.) Settings, users, history and backups are kept. Install from a git clone, as above, for this to work.
 
 ### Not sure which nginx you have?
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.0 — 2026-11-20
+- NginxUI updates itself from the browser: **Check** on the Updates page fetches the GitHub clone you installed from, lists the new changes and version, and **Update NginxUI** pulls them, reinstalls and restarts (settings, users, history and backups kept). The regular update check now includes NginxUI too.
+- git runs as the clone's owner, so your GitHub sign-in is used and file ownership in the clone stays yours.
+
 ## 1.1.0 — 2026-11-20
 - **Security page**: scans nginx (version shown, old TLS, missing HTTPS redirects, passwords over plain HTTP, HSTS, folder listings, public status page), certificates (expiry, private-key and password-file permissions), Ubuntu (security updates, restart needed, automatic updates, firewall, SSH root/password login, fail2ban, exposed databases/remote desktop) and the last 24 hours of traffic (scanners, password guessing). Each finding explains why it matters and how to fix it; safe ones have a one-tap fix. Findings can be marked as OK.
 - **Claude (MCP) access**: built-in MCP server at /mcp with 21 tools for troubleshooting and tuning. Connect the Claude app (custom connector, approved with password + authenticator code, access level and time limit) or Claude Code (key). Every change Claude makes is tested, goes live, and waits on the Claude page for you to keep or revert.

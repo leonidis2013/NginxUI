@@ -13,6 +13,7 @@ UNIT=/etc/systemd/system/nginxui.service
 PORT=9443
 TLS=1
 FORCE=0
+UPDATE=0
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 c() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
@@ -36,6 +37,7 @@ while [[ $# -gt 0 ]]; do
     --port) PORT="$2"; shift 2 ;;
     --no-tls) TLS=0; shift ;;
     --force) FORCE=1; shift ;;
+    --update) UPDATE=1; FORCE=1; shift ;;
     *) die "Unknown option $1" ;;
   esac
 done
@@ -54,6 +56,7 @@ if command -v docker >/dev/null && docker ps --format '{{.Image}}' 2>/dev/null |
 fi
 if ! command -v nginx >/dev/null; then
   w "nginx is not installed."
+  [[ $UPDATE -eq 1 ]] && die "nginx is missing; run the installer by hand."
   read -r -p "Install nginx from Ubuntu now? [Y/n] " a
   [[ "${a:-Y}" =~ ^[Yy]$ ]] || die "NginxUI needs nginx."
   apt-get update -qq && apt-get install -y nginx
@@ -71,6 +74,12 @@ find "$APP" -name '__pycache__' -prune -exec rm -rf {} +
 chown -R root:root "$APP"; chmod -R go-w "$APP"
 
 mkdir -p "$ETC" "$DATA"; chmod 700 "$DATA"
+if [[ -d "$SRC/.git" ]]; then
+  echo "$SRC" > "$ETC/source"
+  c "Browser updates will pull from the git clone in $SRC"
+else
+  rm -f "$ETC/source"
+fi
 
 # --- settings (kept on upgrade) ---
 if [[ ! -f "$ETC/nginxui.json" ]]; then

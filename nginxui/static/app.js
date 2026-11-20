@@ -829,9 +829,9 @@ async function pgUpdates() {
   // 1. status
   let head, sub, dot;
   if (!d.checked) { head = "Not checked yet"; sub = "Check to see what Ubuntu has waiting for this server."; dot = ""; }
-  else if (!pk.length) { head = "Up to date"; sub = `Last checked ${esc(d.checked)}`; dot = "good"; }
+  else if (!pk.length) { head = "Ubuntu is up to date"; sub = `Last checked ${esc(d.checked)}`; dot = "good"; }
   else { head = `${pk.length} update${pk.length > 1 ? "s" : ""} waiting`; sub = `${sec ? `<b style="color:#ff8f8f">${sec} security</b> · ` : ""}${ngx ? `${ngx} nginx · ` : ""}last checked ${esc(d.checked)}`; dot = sec ? "bad" : "warn"; }
-  const checkBtn = d.allowed ? `<button class="btn ${pk.length ? "" : "primary"} upd-act" data-act="updCheck">${d.checked ? "Check again" : "Check for updates"}</button>` : "";
+  const checkBtn = d.allowed ? `<button class="btn ${pk.length || (d.self && d.self.available) ? "" : "primary"} upd-act" data-act="updCheck">${d.checked ? "Check again" : "Check for updates"}</button>` : "";
 
   // 2. choice
   const opt = (scope, title, desc) => `<label class="opt ${counts[scope] ? "" : "off"}"><input type="radio" name="updScope" value="${scope}" data-chg="updScope" ${S.updScope === scope ? "checked" : ""} ${counts[scope] ? "" : "disabled"}>
@@ -852,14 +852,50 @@ async function pgUpdates() {
     <div class="card row between"><div class="row" style="gap:14px;flex-wrap:nowrap;min-width:0"><span class="dot ${dot}" style="width:14px;height:14px;flex:none"></span><div><div style="font-size:20px;font-weight:650">${head}</div><div class="small muted">${sub}</div></div></div>${checkBtn}</div>
     <div class="spacer"></div>
     <div class="card hidden" id="jobCard"><div class="row between"><h3 id="jobTitle" style="margin:0"></h3><span id="jobState"></span></div><div class="spacer"></div><div class="out console" id="jobOut"></div></div>
-    ${choose}${table}
+    ${selfCard(d.self, true)}${choose}${table}
     <div class="card"><h3>This server</h3><div class="grid g2">
       <dl class="kv small"><dt>Ubuntu</dt><dd>${esc(sy.os)}</dd><dt>Kernel</dt><dd>${esc(sy.kernel)}</dd><dt>Uptime</dt><dd>${fmtDur(sy.uptime_s)}</dd></dl>
       <dl class="kv small"><dt>nginx</dt><dd>${esc((sy.nginx_version || "-").replace("nginx/", ""))}</dd><dt>Package</dt><dd class="mono">${esc(np.installed || "-")}${np.candidate && np.candidate !== np.installed ? ` → ${esc(np.candidate)}` : ""}</dd><dt>From</dt><dd>${esc(np.source || "-")}</dd></dl></div>
+      ${selfCard(d.self, false)}
       <div class="spacer"></div><div class="row between" style="border-top:1px solid var(--line);padding-top:14px"><div><b>Automatic security updates</b><div class="small muted">${d.auto.installed ? "Ubuntu installs security fixes daily on its own" : "Not available: unattended-upgrades is not installed"}</div></div>
       <label class="toggle"><input type="checkbox" data-chg="autoUpd" ${d.auto.enabled ? "checked" : ""} ${d.auto.installed && d.allowed ? "" : "disabled"}><span></span></label></div></div></div>`;
   if (running) followJob(d.job.id, () => route());
 }
+function selfCard(su, top) {
+  if (top) {
+    if (!su.git || !su.available) return "";
+    const list = (su.commits || []).slice(0, 8);
+    return `<div class="card upd-act" style="border-color:var(--accent2)"><div class="row between"><div><div style="font-size:17px;font-weight:650">NginxUI ${esc(su.remote_version || "")} is available</div>
+      <div class="small muted">You have ${esc(su.version)} · ${su.commits.length} change${su.commits.length > 1 ? "s" : ""} on GitHub</div></div>
+      <button class="btn primary" data-act="selfUpdate">Update NginxUI</button></div>
+      <div class="spacer"></div>${list.map((c) => `<div class="small" style="padding:3px 0"><span class="muted mono">${esc(c.date)}</span> ${esc(c.subject)}</div>`).join("")}${su.commits.length > 8 ? `<div class="small muted">…and ${su.commits.length - 8} more</div>` : ""}
+      ${su.local_changes ? `<div class="banner warn small" style="margin-top:10px">Files in the NginxUI folder on the server were changed by hand. The update will stop rather than overwrite them.</div>` : ""}
+      <div class="small muted" style="margin-top:8px">Your settings, users, history and backups are kept. NginxUI restarts and this page reconnects by itself.</div></div><div class="spacer"></div>`;
+  }
+  const state = !su.git ? `<span class="muted">installed without git, so it can't update itself here</span>`
+    : su.error ? `<span style="color:#ff8f8f">couldn't reach GitHub</span>` : su.available ? `<b>${esc(su.remote_version || "new version")} available</b>` : su.checked ? "up to date" : "not checked yet";
+  return `<div class="row between" style="border-top:1px solid var(--line);padding-top:14px;margin-top:14px"><div><b>NginxUI ${esc(su.version)}</b><div class="small muted">${state}${su.checked ? ` · checked ${esc(su.checked)}` : ""}</div>
+    ${su.error ? `<div class="small mono muted" style="margin-top:4px">${esc(su.error)}</div>` : ""}</div>
+    ${su.git ? `<button class="btn sm upd-act" data-act="selfCheck">Check</button>` : ""}</div>
+    ${!su.git ? `<div class="small muted" style="margin-top:6px">To get updates in the browser, reinstall from your GitHub clone: <span class="mono">git clone https://github.com/leonidis2013/NginxUI.git &amp;&amp; cd NginxUI &amp;&amp; sudo ./install.sh</span></div>` : ""}`;
+}
+ACT.selfCheck = async (el) => { el.disabled = true; el.textContent = "Checking…"; try { await api("/api/selfupdate/check", {}); route(); } catch (e) { toast(e.message, true); el.disabled = false; el.textContent = "Check"; } };
+ACT.selfUpdate = async () => {
+  if (!(await confirmBox("Update NginxUI?", `<p>NginxUI downloads the new version from GitHub, installs it and restarts. Your settings, users, history and backups are kept, and nginx keeps running the whole time.</p>`, "Update"))) return;
+  const from = S.version;
+  try {
+    const r = await api("/api/selfupdate/apply", {});
+    followJob(r.job, () => {
+      $("#page").insertAdjacentHTML("afterbegin", `<div class="banner info">Restarting NginxUI… this page reloads when it's back.</div>`);
+      let tries = 0, down = false;
+      const t = setInterval(async () => {
+        tries++;
+        try { const s = await (await fetch("/api/session", { credentials: "same-origin" })).json(); if (s.version !== from || down || tries >= 10) { clearInterval(t); location.reload(); } } catch (e) { down = true; }
+        if (tries > 60) { clearInterval(t); toast("NginxUI hasn't come back yet. Check: journalctl -u nginxui", true); }
+      }, 2000);
+    });
+  } catch (e) { toast(e.message, true); }
+};
 CHG.updScope = (el) => {
   S.updScope = el.value;
   const n = +el.closest(".opt").querySelector(".badge").textContent;

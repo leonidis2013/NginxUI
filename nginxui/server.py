@@ -33,7 +33,7 @@ import stats  # noqa: E402
 import security  # noqa: E402
 import mcp  # noqa: E402
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
 CONFIG_PATH = os.environ.get("NGINXUI_CONFIG", "/etc/nginxui/nginxui.json")
@@ -633,6 +633,10 @@ def start_job(title, fn, user):
 
 
 def job_check_updates(job):
+    try:
+        selfupdate_check(job)
+    except Exception as e:
+        job.log(f"NginxUI update check skipped: {e}")
     rc = job.stream(["apt-get", "update"], APT_ENV)
     if rc != 0:
         job.log("apt-get update reported a problem (see above). Showing what is known.")
@@ -642,6 +646,104 @@ def job_check_updates(job):
     job.log(f"{len(pkgs)} package(s) can be updated "
             f"({sum(p['security'] for p in pkgs)} security, {sum(p['nginx'] for p in pkgs)} nginx).")
     return rc == 0
+
+
+# ---------------------------------------------------------------- NginxUI self-update (git)
+
+SELF_PATH = os.path.join(DATA, "selfupdate.json")
+SOURCE_FILE = os.path.join(os.path.dirname(CONFIG_PATH), "source")
+
+
+def self_source():
+    src = read_text(SOURCE_FILE).strip()
+    return src if src and os.path.isdir(os.path.join(src, ".git")) else None
+
+
+def git(args, timeout=120):
+    """Run git in the clone as the clone's owner, so their credentials work and file ownership stays theirs."""
+    src = self_source()
+    st = os.stat(src)
+    cmd = ["git", "-c", f"safe.directory={src}", "-C", src] + args
+    if os.geteuid() == 0 and st.st_uid != 0 and shutil.which("runuser"):
+        import pwd
+        try:
+            cmd = ["runuser", "-u", pwd.getpwuid(st.st_uid).pw_name, "--"] + cmd
+        except KeyError:
+            pass
+    return run(cmd, timeout=timeout, env={"GIT_TERMINAL_PROMPT": "0"})
+
+
+def selfupdate_check(job=None):
+    log = job.log if job else (lambda s: None)
+    src = self_source()
+    if not src:
+        return {"git": False}
+    log("Checking GitHub for a newer NginxUI…")
+    rc, branch = git(["rev-parse", "--abbrev-ref", "HEAD"], 15)
+    branch = branch.strip() if rc == 0 else "main"
+    rc, out = git(["fetch", "--quiet", "origin", branch])
+    if rc != 0:
+        res = {"git": True, "checked": now_iso(), "error": out.strip()[-300:] or "git fetch failed", "available": False}
+        jsave(SELF_PATH, res)
+        log("  couldn't reach GitHub: " + res["error"])
+        return res
+    rc, log_out = git(["log", f"HEAD..origin/{branch}", "--format=%h%x09%cs%x09%s", "-n", "50"], 30)
+    commits = [dict(zip(("hash", "date", "subject"), l.split("\t", 2))) for l in log_out.splitlines() if l.count("\t") >= 2]
+    rc, rv = git(["show", f"origin/{branch}:VERSION"], 15)
+    remote = rv.strip() if rc == 0 else None
+    rc, dirty = git(["status", "--porcelain", "--untracked-files=no"], 15)
+    res = {"git": True, "checked": now_iso(), "branch": branch, "available": bool(commits), "remote_version": remote,
+           "commits": commits, "local_changes": bool(dirty.strip())}
+    jsave(SELF_PATH, res)
+    log(f"  NginxUI {VERSION} installed; {('version ' + remote + ' is available') if commits else 'up to date'}.")
+    return res
+
+
+def job_selfupdate(job):
+    src = self_source()
+    if not src:
+        job.log("NginxUI was not installed from a git clone, so it can't update itself.")
+        return False
+    job.log("Step 1: downloading the new version from GitHub")
+    rc, out = git(["pull", "--ff-only"], 180)
+    job.log(out)
+    if rc != 0:
+        job.log("git pull failed. If you changed files in the clone, undo them (git stash) and try again.")
+        return False
+    if not os.path.isfile(os.path.join(src, "install.sh")):
+        job.log("install.sh is missing in the clone.")
+        return False
+    job.log("Step 2: installing it and restarting NginxUI (this page reconnects by itself)")
+    cmd = ["/bin/bash", os.path.join(src, "install.sh"), "--update"]
+    # run the installer outside this service, because it restarts NginxUI
+    ok = False
+    if shutil.which("systemd-run"):
+        rc, out = run(["systemd-run", f"--unit=nginxui-selfupdate-{int(time.time())}", "--collect", "--quiet"] + cmd,
+                      timeout=30)
+        ok = rc == 0
+    if not ok:
+        logf = open(os.path.join(DATA, "selfupdate.log"), "w")
+        subprocess.Popen(cmd, start_new_session=True, stdout=logf, stderr=subprocess.STDOUT)
+        ok = True
+    job.log("Installer started.")
+    jsave(SELF_PATH, {**jload(SELF_PATH, {}), "available": False, "commits": [], "updating_from": VERSION})
+    return ok
+
+
+def api_selfupdate(h, q, b, user):
+    st = jload(SELF_PATH, {})
+    return {"version": VERSION, "git": bool(self_source()), "source": self_source(), **{k: v for k, v in st.items() if k != "git"}}
+
+
+def api_selfupdate_check(h, q, b, user):
+    if not self_source():
+        raise ApiError("NginxUI was not installed from a git clone")
+    return {**selfupdate_check(), "version": VERSION}
+
+
+def api_selfupdate_apply(h, q, b, user):
+    j = start_job("Update NginxUI", job_selfupdate, user)
+    return {"job": j.id}
 
 
 def make_apply_job(scope, user):
@@ -1188,6 +1290,7 @@ def api_updates(h, q, b, user):
     cur = JOBS.get(CURRENT_JOB["id"])
     return {**upd, "auto": auto_upgrades_state(), "nginx_pkg": nginx_package_info(),
             "system": system_info(), "allowed": CFG["allow_system_updates"],
+            "self": api_selfupdate(h, q, b, user),
             "job": {"id": cur.id, "title": cur.title, "done": cur.done} if cur else None}
 
 
@@ -1583,6 +1686,9 @@ ROUTES = {
     ("GET", "/api/logs"): (api_logs, True),
     ("GET", "/api/logs/tail"): (api_log_tail, True),
     ("GET", "/api/updates"): (api_updates, True),
+    ("GET", "/api/selfupdate"): (api_selfupdate, True),
+    ("POST", "/api/selfupdate/check"): (api_selfupdate_check, True),
+    ("POST", "/api/selfupdate/apply"): (api_selfupdate_apply, True),
     ("POST", "/api/updates/check"): (api_updates_check, True),
     ("POST", "/api/updates/apply"): (api_updates_apply, True),
     ("POST", "/api/updates/auto"): (api_updates_auto, True),
