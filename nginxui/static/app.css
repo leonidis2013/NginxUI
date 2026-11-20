@@ -240,3 +240,13 @@ details.card summary { cursor: pointer; list-style: none; }
 details.card summary::-webkit-details-marker { display: none; }
 details.card summary::before { content: "▸ "; color: var(--muted); }
 details.card[open] summary::before { content: "▾ "; }
+/* security + claude */
+.fgroup rect { fill: rgba(62,198,168,.04); stroke: #2f3a46; stroke-dasharray: 4 3; }
+.fgroup text { fill: var(--accent); font-size: 11px; font-weight: 600; }
+.fgroup text.sub { fill: var(--muted); font-weight: 400; }
+.fgroup { cursor: pointer; }
+.fgroup:hover rect { stroke: var(--accent2); }
+details.finding summary::before { content: none; }
+details.finding[open] { border-color: #3a4552; }
+.grow { flex: 1; }
+details.finding summary::before, details.finding[open] summary::before { content: none; }

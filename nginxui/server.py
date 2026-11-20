@@ -30,8 +30,10 @@ from urllib.parse import parse_qs, urlparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import nginxconf  # noqa: E402
 import stats  # noqa: E402
+import security  # noqa: E402
+import mcp  # noqa: E402
 
-VERSION = "1.0.2"
+VERSION = "1.1.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
 CONFIG_PATH = os.environ.get("NGINXUI_CONFIG", "/etc/nginxui/nginxui.json")
@@ -842,8 +844,15 @@ def api_setup(h, q, b, user):
     return {"ok": True, "_cookie": new_session(name)}
 
 
-def api_login(h, q, b, user):
+def client_ip(h):
     ip = h.client_address[0]
+    if ip in ("127.0.0.1", "::1") and h.headers.get("X-Real-IP"):
+        return h.headers["X-Real-IP"].strip()[:64]
+    return ip
+
+
+def api_login(h, q, b, user):
+    ip = client_ip(h)
     with AUTH_LOCK:
         f = FAILS.get(ip, [0, 0])
         if f[1] > time.time():
@@ -1310,6 +1319,242 @@ def api_audit(h, q, b, user):
     return {"entries": [json.loads(l) for l in reversed(lines) if l.strip()]}
 
 
+# ---------------------------------------------------------------- security scan
+
+SEC_PATH = os.path.join(DATA, "security.json")
+HARDEN = "nginxui-hardening.conf"
+
+
+def path_to_fid(path):
+    rp = os.path.realpath(path)
+    d, n = os.path.dirname(rp), os.path.basename(rp)
+    for g, (key, _) in GROUPS.items():
+        if g == "enabled":
+            continue
+        if d == os.path.realpath(CFG[key]):
+            if g == "main" and n != "nginx.conf":
+                return None
+            return f"{g}:{n}"
+    return None
+
+
+def listening_ports():
+    rc, out = run(["ss", "-Htlnp"], timeout=10)
+    return security.parse_ss(out) if rc == 0 else []
+
+
+def ssh_config():
+    if not shutil.which("sshd"):
+        return None
+    rc, out = run(["sshd", "-T"], timeout=10)
+    return security.parse_sshd(out) if rc == 0 else None
+
+
+def security_scan():
+    files, _src = gather_config_files()
+    st = mcp.state()
+    ctx = {"cfg": CFG, "run": lambda cmd, t=30: run(cmd, timeout=t), "files": files, "path_to_fid": path_to_fid,
+           "nginx_version": nginx_version_tuple(), "updates": jload(UPD_PATH, {}), "system": system_info(),
+           "auto": auto_upgrades_state(), "listening": listening_ports(), "ssh": ssh_config(),
+           "listdir": safe_listdir, "mcp": {"enabled": st["enabled"], "totp": st["totp_confirmed"]}}
+    findings, passed = security.Scan(ctx).run()
+    ignored = set(jload(os.path.join(DATA, "security_ignore.json"), []))
+    for f in findings:
+        f["ignored"] = f["id"] in ignored
+    res = {"scanned": now_iso(), "findings": findings, "passed": passed}
+    jsave(SEC_PATH, res)
+    return res
+
+
+def _public(res):
+    return {**res, "findings": [{k: v for k, v in f.items() if not k.startswith("_")} for f in res.get("findings", [])]}
+
+
+def api_security(h, q, b, user):
+    return _public(jload(SEC_PATH, {"scanned": None, "findings": [], "passed": []}))
+
+
+def api_security_scan(h, q, b, user):
+    r = security_scan()
+    audit(user, "security-scan", f"{sum(1 for f in r['findings'] if not f['ignored'] and f['sev'] in ('high', 'medium'))} high/medium")
+    return _public(r)
+
+
+def _harden_add(line, user, note):
+    p = os.path.join(CFG["conf_d"], HARDEN)
+    cur = read_text(p) if os.path.isfile(p) else "# Managed by NginxUI: security settings added from the Security page\n"
+    if line in cur:
+        return {"ok": True}
+    new = cur.rstrip("\n") + "\n" + line + "\n"
+    return safe_apply([("write", p, new)], user, note, [(f"conf:{HARDEN}", new, "security-fix")])
+
+
+def api_security_fix(h, q, b, user):
+    fid = body_str(b, "id")
+    res = security_scan()
+    f = next((x for x in res["findings"] if x["id"] == fid), None)
+    if not f or not f.get("fix_action"):
+        raise ApiError("There is no automatic fix for that (or it's already fixed). Scan again to refresh.")
+    act = f["fix_action"]
+    if act == "server_tokens":
+        out = _harden_add("server_tokens off;", user, "Security fix: hide nginx version")
+    elif act == "ssl_protocols_add":
+        out = _harden_add("ssl_protocols TLSv1.2 TLSv1.3;", user, "Security fix: modern TLS only")
+    elif act == "ssl_protocols":
+        files, _ = gather_config_files()
+        ops, hist = [], []
+        for path, _t in files:
+            fid2 = path_to_fid(path)
+            if not fid2:
+                continue
+            _, _, p = file_path(fid2)
+            txt = read_text(p)
+            new = re.sub(r"(?m)^(\s*)ssl_protocols\s+[^;#]*\b(SSLv2|SSLv3|TLSv1|TLSv1\.1)\b[^;#]*;",
+                         r"\1ssl_protocols TLSv1.2 TLSv1.3;", txt)
+            new = re.sub(r"(?m)^(\s*)ssl_protocols\s+[^;#]*(SSLv3|TLSv1 |TLSv1\.1)[^;#]*;", r"\1ssl_protocols TLSv1.2 TLSv1.3;", new)
+            if new != txt:
+                ensure_original(fid2, p)
+                ops.append(("write", p, new))
+                hist.append((fid2, new, "security-fix"))
+        if not ops:
+            raise ApiError("Couldn't find a file NginxUI can edit for this. Open the config and change the ssl_protocols line by hand.")
+        out = safe_apply(ops, user, "Security fix: modern TLS only", hist)
+    elif act == "auto_updates":
+        out = api_updates_auto(h, q, {"enabled": True}, user)
+    elif act in ("keyperms", "htpasswdperms"):
+        files, _ = gather_config_files()
+        name = "ssl_certificate_key" if act == "keyperms" else "auth_basic_user_file"
+        paths = set(re.findall(rf"(?m)^\s*{name}\s+([^;\s]+);", "\n".join(t for _, t in files)))
+        for p in paths:
+            p = p if os.path.isabs(p) else os.path.join(CFG["nginx_dir"], p)
+            if os.path.isfile(p) and os.stat(p).st_mode & 0o004:
+                if act == "htpasswdperms":
+                    try:
+                        shutil.chown(p, "root", "www-data")
+                    except (LookupError, OSError):
+                        pass
+                    os.chmod(p, 0o640)
+                else:
+                    os.chmod(p, 0o600)
+        out = {"ok": True}
+    else:
+        raise ApiError("Unknown fix")
+    audit(user, "security-fix", fid)
+    r = security_scan()
+    return {"fixed": fid, "result": out, **_public(r)}
+
+
+def api_security_ignore(h, q, b, user):
+    fid = body_str(b, "id", 300)
+    p = os.path.join(DATA, "security_ignore.json")
+    ig = set(jload(p, []))
+    (ig.add if b.get("ignore") else ig.discard)(fid)
+    jsave(p, sorted(ig))
+    audit(user, "security-accept" if b.get("ignore") else "security-unaccept", fid)
+    res = jload(SEC_PATH, {"scanned": None, "findings": [], "passed": []})
+    for f in res["findings"]:
+        f["ignored"] = f["id"] in ig
+    jsave(SEC_PATH, res)
+    return _public(res)
+
+
+# ---------------------------------------------------------------- Claude (MCP) settings
+
+def api_claude(h, q, b, user):
+    return mcp.ui_state(h, user)
+
+
+def api_claude_enable(h, q, b, user):
+    with mcp.LOCK:
+        st = mcp.state()
+        st["enabled"] = bool(b.get("enabled"))
+        mcp.save(st)
+    audit(user, "claude-access", "on" if b.get("enabled") else "off")
+    return mcp.ui_state(h, user)
+
+
+def api_claude_url(h, q, b, user):
+    url = (b.get("public_url") or "").strip().rstrip("/")
+    if url and not re.match(r"^https?://[A-Za-z0-9.\-]+(:\d+)?$", url):
+        raise ApiError("Use just the address, like https://nginxui.example.com")
+    with mcp.LOCK:
+        st = mcp.state()
+        st["public_url"] = url
+        mcp.save(st)
+    return mcp.ui_state(h, user)
+
+
+def api_claude_totp_new(h, q, b, user):
+    with mcp.LOCK:
+        st = mcp.state()
+        if st["totp_confirmed"] and not check_pw(users()[user], b.get("password", "")):
+            raise ApiError("Enter your NginxUI password to replace the authenticator", 403)
+        st["totp_secret"] = mcp.totp_new()
+        st["totp_confirmed"] = False
+        st["totp_last"] = 0
+        mcp.save(st)
+    audit(user, "claude-totp-new", "")
+    return {"secret": st["totp_secret"], "uri": mcp.totp_uri(st["totp_secret"], socket.gethostname())}
+
+
+def api_claude_totp_confirm(h, q, b, user):
+    with mcp.LOCK:
+        st = mcp.state()
+        if not mcp.totp_check(st, b.get("code", "")):
+            raise ApiError("That code didn't match. Check the phone's clock and try the newest code.")
+        st["totp_confirmed"] = True
+        mcp.save(st)
+    audit(user, "claude-totp-confirmed", "")
+    return mcp.ui_state(h, user)
+
+
+def api_claude_token(h, q, b, user):
+    level = b.get("level") if b.get("level") in mcp.LEVELS else "read"
+    try:
+        hours = int(b.get("hours", 8))
+    except (TypeError, ValueError):
+        hours = 8
+    if hours not in mcp.DURATIONS:
+        raise ApiError("Pick one of the listed durations")
+    if not mcp.state()["enabled"]:
+        raise ApiError("Turn Claude access on first")
+    tok, gid = mcp.new_grant((b.get("name") or "Claude Code").strip(), level, hours, "token")
+    url = mcp.base_url(h) + "/mcp"
+    return {"token": tok, "url": url,
+            "command": f'claude mcp add --transport http nginxui {url} --header "Authorization: Bearer {tok}"'}
+
+
+def api_claude_revoke(h, q, b, user):
+    gid = body_str(b, "id")
+    with mcp.LOCK:
+        st = mcp.state()
+        g = st["grants"].pop(gid, None)
+        mcp.save(st)
+    audit(user, "claude-revoke", g["name"] if g else gid)
+    return mcp.ui_state(h, user)
+
+
+def api_claude_review(h, q, b, user):
+    rid = body_str(b, "id")
+    if b.get("action") == "revert":
+        mcp.revert_review(rid, user)
+    else:
+        mcp.keep_review(rid, user)
+    return mcp.ui_state(h, user)
+
+
+def api_claude_review_get(h, q, b, user):
+    r = next((x for x in mcp.state()["reviews"] if x["id"] == q.get("id")), None)
+    if not r:
+        raise ApiError("Not found", 404)
+    try:
+        _, _, p = file_path(r["fid"])
+        now_txt = read_text(p) if os.path.isfile(p) else None
+    except ApiError:
+        now_txt = None
+    return {**r, "after": now_txt}
+
+
 ROUTES = {
     ("GET", "/api/session"): (api_session, False),
     ("POST", "/api/setup"): (api_setup, False),
@@ -1352,6 +1597,19 @@ ROUTES = {
     ("POST", "/api/users/delete"): (api_user_delete, True),
     ("POST", "/api/password"): (api_password, True),
     ("GET", "/api/audit"): (api_audit, True),
+    ("GET", "/api/security"): (api_security, True),
+    ("POST", "/api/security/scan"): (api_security_scan, True),
+    ("POST", "/api/security/fix"): (api_security_fix, True),
+    ("POST", "/api/security/ignore"): (api_security_ignore, True),
+    ("GET", "/api/claude"): (api_claude, True),
+    ("POST", "/api/claude/enable"): (api_claude_enable, True),
+    ("POST", "/api/claude/url"): (api_claude_url, True),
+    ("POST", "/api/claude/totp/new"): (api_claude_totp_new, True),
+    ("POST", "/api/claude/totp/confirm"): (api_claude_totp_confirm, True),
+    ("POST", "/api/claude/token"): (api_claude_token, True),
+    ("POST", "/api/claude/revoke"): (api_claude_revoke, True),
+    ("POST", "/api/claude/review"): (api_claude_review, True),
+    ("GET", "/api/claude/review"): (api_claude_review_get, True),
 }
 
 STATIC = {"/": ("index.html", "text/html; charset=utf-8"),
@@ -1383,7 +1641,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         for k, v in SEC_HEADERS.items():
-            self.send_header(k, v)
+            if k not in (extra or {}):
+                self.send_header(k, v)
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -1414,6 +1673,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, b"not found", "text/plain")
         if method == "GET" and path == "/api/backups/download":
             return self._download(u)
+        if path in mcp.RAW:
+            try:
+                return mcp.RAW[path](self, method, u)
+            except ApiError as e:
+                return self._json(e.status, {"error": str(e)})
         route = ROUTES.get((method, path))
         if not route:
             return self._json(404, {"error": "Not found"})
@@ -1466,6 +1730,9 @@ class Handler(BaseHTTPRequestHandler):
         with open(p, "rb") as f:
             data = f.read()
         self._send(200, data, "application/gzip", {"Content-Disposition": f'attachment; filename="{n}"'})
+
+
+mcp.init(sys.modules[__name__])
 
 
 def main():

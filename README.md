@@ -2,7 +2,7 @@
 
 A web UI for an nginx reverse proxy on Ubuntu. Manage configs safely, set up new sites with guided wizards, see where traffic goes, read logs and stats, and keep Ubuntu and nginx up to date — all from a browser.
 
-Version 1.0.0 · runs as a native systemd service · no dependencies beyond the Python 3 that ships with Ubuntu.
+Version 1.1.0 · runs as a native systemd service · no dependencies beyond the Python 3 that ships with Ubuntu.
 
 ## What it does
 
@@ -12,11 +12,13 @@ Version 1.0.0 · runs as a native systemd service · no dependencies beyond the 
 | **Configs** | Edit every file in `sites-available`, `conf.d`, `snippets` and `nginx.conf` with syntax colors. Turn sites on/off with a switch. **Every save is tested with `nginx -t` first; if the test or reload fails, the old file is put back automatically** and the error line is highlighted. |
 | **History** | Every save is kept (60 versions per file), plus the original file from before NginxUI touched it. Compare any version with a diff and restore it with one tap. Deleted files can be restored too. |
 | **Wizards** | Reverse proxy, load balancer, static website, redirect. Asks plain questions (domain, where the app is, HTTPS certificate, IP allow list, password prompt, WebSockets, upload size…), shows the finished config, then applies it safely. |
-| **Traffic Flow** | A live map: visitors → ports → sites → backends. Line thickness shows requests in the last 5 minutes; every backend is checked and shown green (answering) or red (down). Tap anything for details. |
+| **Traffic Flow** | Grouped by config file. A live map: visitors → ports → sites → backends. Line thickness shows requests in the last 5 minutes; every backend is checked and shown green (answering) or red (down). Tap anything for details. |
 | **Stats** | Requests over time, 4xx/5xx errors, status codes, top visitors, top pages, top clients — from the access logs. Optional live connection counter (nginx `stub_status`, local-only). |
 | **Logs** | Tail any nginx log with a filter and follow mode; errors and 4xx/5xx lines are colored. |
 | **Updates** | Check for Ubuntu updates, then install **security only**, **nginx only**, or **everything**. Before installing it backs up `/etc/nginx`; apt is told to keep your config files; afterwards nginx is tested and restarted if needed. Shows when a reboot is required (with a guarded reboot button) and toggles Ubuntu's automatic security updates. |
 | **Backups** | Snapshot the whole `/etc/nginx` folder, download it, or restore it (restores are tested too, and roll back on failure). Automatic backup before every update and restore. |
+| **Security** | One scan of nginx, certificates, Ubuntu and recent traffic. Every finding says why it matters and how to fix it, with copy-ready commands and a one-tap fix where it's safe (hide nginx version, modern TLS only, automatic updates, file permissions). Mark findings as OK to hide them. |
+| **Claude** | Built-in MCP server so Claude can troubleshoot and tune your proxy. See below. |
 | **Settings** | Users, password change, full activity log. |
 
 ## Install
@@ -54,6 +56,15 @@ sudo ufw allow from 192.168.1.0/24 to any port 9443 proto tcp
 ```
 
 Avoid exposing the NginxUI port to the internet; it can change your proxy and install system updates.
+
+## Connecting Claude (MCP)
+
+Turn it on in **Claude** in the sidebar, then set up an authenticator app (Google/Microsoft Authenticator, 1Password, …).
+
+- **Claude app (phone, web, desktop):** Settings → Connectors → Add custom connector → paste `https://<your-nginxui-domain>/mcp`. An NginxUI page opens; sign in with your password **and** authenticator code, then choose *Look only* or *Look and change config* and how long (1 hour – 30 days). The Claude app connects from Anthropic's cloud, so NginxUI must be published through nginx on a domain with a real certificate — the **Publish NginxUI with a wizard** button sets that up.
+- **Claude Code:** create a key on the Claude Code tab and run the `claude mcp add …` command it shows.
+
+Claude gets 21 tools: overview, configs, full `nginx -T`, config test, traffic flow with backend health, backend checks, stats, logs, security scan, certificates, history, wizard previews — and with change access: save/create/enable/restore configs, apply wizards, reload. Every change is tested with `nginx -t` (rolled back if it fails), goes live, and is listed on the Claude page for you to **Keep** or **Revert**. Claude can't delete files, install updates or restart the server. Disconnect any connection at any time.
 
 ## Settings file
 
@@ -94,6 +105,8 @@ systemd/nginxui.service  service unit
 nginxui/server.py        web server + API
 nginxui/nginxconf.py     nginx config parser (flow map) and wizard generator
 nginxui/stats.py         access-log stats and log tailing
+nginxui/security.py      security scan
+nginxui/mcp.py           built-in MCP server + OAuth approval for Claude
 nginxui/static/          web UI (HTML, CSS, JS — no external files)
 ```
 

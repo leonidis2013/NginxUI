@@ -91,6 +91,7 @@ async function boot() {
   S.user = s.user;
   renderShell();
   route();
+  refreshBadges();
 }
 
 function renderLogin() {
@@ -128,7 +129,8 @@ function renderSetup() {
 const PAGES = [
   ["dashboard", "Dashboard", "◉"], ["configs", "Configs", "≣"], ["wizards", "Wizards", "✦"],
   ["flow", "Traffic Flow", "⇄"], ["stats", "Stats", "▤"], ["logs", "Logs", "☰"],
-  ["updates", "Updates", "⟳"], ["backups", "Backups", "⛁"], ["settings", "Settings", "⚙"],
+  ["security", "Security", "⛨"], ["updates", "Updates", "⟳"], ["backups", "Backups", "⛁"],
+  ["claude", "Claude", "✳"], ["settings", "Settings", "⚙"],
 ];
 
 function renderShell() {
@@ -156,7 +158,7 @@ function route() {
   $("#ptitle").textContent = PAGES.find((p) => p[0] === page)[1];
   $("#pactions").innerHTML = "";
   $("#page").innerHTML = `<div class="empty">Loading…</div>`;
-  const fn = { dashboard: pgDashboard, configs: pgConfigs, wizards: pgWizards, flow: pgFlow, stats: pgStats, logs: pgLogs, updates: pgUpdates, backups: pgBackups, settings: pgSettings }[page];
+  const fn = { dashboard: pgDashboard, configs: pgConfigs, wizards: pgWizards, flow: pgFlow, stats: pgStats, logs: pgLogs, updates: pgUpdates, security: pgSecurity, claude: pgClaude, backups: pgBackups, settings: pgSettings }[page];
   fn(decodeURIComponent(parts.slice(1).join("/"))).catch((e) => { $("#page").innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; });
 }
 
@@ -621,7 +623,8 @@ ACT.wizApply = async () => {
 
 // ------------------------------------------------------------------ traffic flow
 async function pgFlow() {
-  $("#pactions").innerHTML = `<label class="row small"><label class="toggle"><input type="checkbox" id="flAuto" checked><span></span></label>Auto-refresh</label><button class="btn" data-act="flowRefresh">Refresh</button>`;
+  $("#pactions").innerHTML = `<label class="row small"><label class="toggle"><input type="checkbox" data-chg="flowGroup" ${S.flowGroup !== false ? "checked" : ""}><span></span></label>Group by config file</label>
+    <label class="row small"><label class="toggle"><input type="checkbox" id="flAuto" checked><span></span></label>Auto-refresh</label><button class="btn" data-act="flowRefresh">Refresh</button>`;
   $("#page").innerHTML = `<div id="flowTop"></div><div class="grid" style="grid-template-columns:minmax(0,1fr) 320px" id="flowGrid"><div class="flowwrap" id="flowSvg"><div class="empty">Reading nginx config…</div></div><div class="card" id="flowSide"><h3>Details</h3><p class="muted small">Tap a site or backend to see more.</p></div></div>
     <div class="small muted" style="margin-top:10px">${window.innerWidth < 900 ? "Swipe the map sideways to see where each site goes. " : ""}Lines show where requests go. Thicker, moving lines = more requests in the last 5 minutes. Red dashed = backend not answering. Backends are checked by opening a TCP connection.</div>`;
   if (window.innerWidth < 900) $("#flowGrid").style.gridTemplateColumns = "1fr";
@@ -630,6 +633,8 @@ async function pgFlow() {
   every(10000, () => { if ($("#flAuto") && $("#flAuto").checked) flowLoad().catch(() => {}); });
 }
 ACT.flowRefresh = () => flowLoad();
+CHG.flowGroup = (el) => { S.flowGroup = el.checked; drawFlow(S.flow); };
+ACT.flowFile = (el) => { location.hash = `#/configs/${encodeURIComponent(el.dataset.id)}`; };
 
 async function flowLoad() {
   const [d, fl] = await Promise.all([api("/api/flow"), S.files.length ? Promise.resolve({ files: S.files }) : api("/api/files")]);
@@ -649,7 +654,10 @@ async function flowLoad() {
 
 function drawFlow(d) {
   const NH = 46, GAP = 12, top = 34;
-  const servers = d.servers.slice().sort((a, b) => (a.listen[0]?.port || 0) - (b.listen[0]?.port || 0) || a.names[0].localeCompare(b.names[0]));
+  const group = S.flowGroup !== false;
+  const byPort = (a, b) => (a.listen[0]?.port || 0) - (b.listen[0]?.port || 0) || a.names[0].localeCompare(b.names[0]);
+  const fname = (s) => s.file.split("/").pop();
+  const servers = d.servers.slice().sort(group ? (a, b) => fname(a).localeCompare(fname(b)) || byPort(a, b) : byPort);
   // targets column: backends + static/redirect pseudo targets
   const targets = [];
   const tIndex = {};
@@ -666,12 +674,21 @@ function drawFlow(d) {
     });
   });
   const ports = d.ports;
-  const rows = Math.max(servers.length, targets.length, ports.length, 1);
-  const H = top + rows * (NH + GAP) + 10;
+  // site column: one bundle per config file when grouping is on
+  const GH = 24, GG = 16; let yy = 0; const sYs = [], groups = [];
+  servers.forEach((s, i) => {
+    if (group && (i === 0 || fname(servers[i - 1]) !== fname(s))) { if (i) yy += GG; groups.push({ file: s.file, y0: yy, n: 0, req: 0 }); yy += GH; }
+    sYs.push(yy); yy += NH + GAP;
+    if (group) { const g = groups[groups.length - 1]; g.y1 = yy - GAP; g.n++; g.req += s.req_5m || 0; }
+  });
+  const siteH = Math.max(yy, NH + GAP);
+  const rowsH = Math.max(siteH, targets.length * (NH + GAP), ports.length * (NH + GAP), NH + GAP);
+  const H = top + rowsH + 16;
   const X = { inet: 14, port: 150, site: 300, tgt: 600 }, W = 840;
-  const colY = (i, n) => top + i * (NH + GAP) + ((rows - n) * (NH + GAP)) / 2;
+  const colY = (i, n) => top + i * (NH + GAP) + (rowsH - n * (NH + GAP)) / 2;
   const portY = (p) => colY(ports.findIndex((x) => x.port === p.port && x.ssl === p.ssl), ports.length);
-  const siteY = (i) => colY(i, servers.length), tY = (i) => colY(i, targets.length);
+  const siteOff = (rowsH - siteH) / 2;
+  const siteY = (i) => top + sYs[i] + siteOff, tY = (i) => colY(i, targets.length);
   const inetY = colY(0, 1);
   const curve = (x1, y1, x2, y2) => `M${x1},${y1} C${(x1 + x2) / 2},${y1} ${(x1 + x2) / 2},${y2} ${x2},${y2}`;
   const width = (n) => 1.5 + Math.min(8, Math.log2(1 + (n || 0)) * 1.4);
@@ -689,6 +706,12 @@ function drawFlow(d) {
   });
   const node = (x, y, w, title, sub, dot, key, sel) => `<g class="fnode ${sel ? "sel" : ""}" ${key ? `data-act="flowPick" data-key="${esc(key)}"` : ""} transform="translate(${x},${y})"><rect width="${w}" height="${NH}" rx="8"/>
     ${dot ? `<circle cx="14" cy="${NH / 2}" r="5" fill="${dot}"/>` : ""}<text x="${dot ? 26 : 12}" y="19">${esc(title.length > 26 ? title.slice(0, 25) + "…" : title)}</text><text class="sub" x="${dot ? 26 : 12}" y="35">${esc(sub.length > 34 ? sub.slice(0, 33) + "…" : sub)}</text></g>`;
+  let boxes = "";
+  groups.forEach((g) => {
+    const y = top + g.y0 + siteOff - 4, h = g.y1 - g.y0 + 10, fid = fileIdFor(g.file);
+    boxes += `<g class="fgroup" ${fid ? `data-act="flowFile" data-id="${esc(fid)}"` : ""}><rect x="${X.site - 10}" y="${y}" width="240" height="${h}" rx="10"/>
+      <text x="${X.site - 2}" y="${y + 15}">${esc(g.file.split("/").pop())}</text><text class="sub" x="${X.site + 222}" y="${y + 15}" text-anchor="end">${g.n} block${g.n > 1 ? "s" : ""}${g.req ? ` · ${g.req} req` : ""}</text></g>`;
+  });
   nodes += node(X.inet, inetY, 110, "Internet / LAN", "visitors", null);
   ports.forEach((p) => { nodes += node(X.port, portY(p), 110, `:${p.port}`, p.ssl ? "HTTPS" : "HTTP", p.ssl ? "#3ec6a8" : "#5aa9f0"); });
   servers.forEach((s, i) => {
@@ -701,7 +724,7 @@ function drawFlow(d) {
   });
   const heads = [["Visitors", X.inet], ["Ports", X.port], ["Sites", X.site], ["Goes to", X.tgt]].map(([l, x]) => `<text class="colhead" x="${x}" y="18">${l}</text>`).join("");
   S.flowTargets = targets;
-  $("#flowSvg").innerHTML = servers.length ? `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${heads}${edges}${nodes}</svg>` : `<div class="empty">No enabled server blocks found. Create one with a <a href="#/wizards">wizard</a>.</div>`;
+  $("#flowSvg").innerHTML = servers.length ? `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${heads}${boxes}${edges}${nodes}</svg>` : `<div class="empty">No enabled server blocks found. Create one with a <a href="#/wizards">wizard</a>.</div>`;
 }
 
 ACT.flowPick = (el) => {
@@ -922,6 +945,175 @@ async function pgSettings() {
 ACT.userDel = async (el) => {
   if (!(await confirmBox(`Remove ${el.dataset.u}?`, "They are signed out right away.", "Remove", true))) return;
   try { await api("/api/users/delete", { username: el.dataset.u }); route(); } catch (e) { toast(e.message, true); }
+};
+
+
+// ------------------------------------------------------------------ badges
+async function refreshBadges() {
+  try {
+    const [sec, cl] = await Promise.all([api("/api/security"), api("/api/claude")]);
+    const hi = sec.findings.filter((f) => !f.ignored && f.sev === "high").length;
+    setBadge("security", hi ? hi : "", "bad");
+    setBadge("claude", cl.pending ? cl.pending : "", "warn");
+  } catch (e) { /* ignore */ }
+}
+
+function copyBtn(text, label = "Copy") { return `<button class="btn sm" data-act="copy" data-text="${esc(text)}">${label}</button>`; }
+ACT.copy = async (el) => {
+  try { await navigator.clipboard.writeText(el.dataset.text); toast("Copied"); }
+  catch (e) { const t = document.createElement("textarea"); t.value = el.dataset.text; document.body.appendChild(t); t.select(); document.execCommand("copy"); t.remove(); toast("Copied"); }
+};
+
+// ------------------------------------------------------------------ security
+const SEV = { high: ["Fix soon", "bad"], medium: ["Should fix", "warn"], low: ["Good to fix", "info"], info: ["For your information", ""] };
+
+async function pgSecurity() {
+  let d = await api("/api/security");
+  if (!d.scanned) { $("#page").innerHTML = `<div class="card empty">Running the first security scan…</div>`; d = await api("/api/security/scan", {}); }
+  renderSecurity(d);
+}
+
+function renderSecurity(d) {
+  if (S.page !== "security") return;
+  const open = d.findings.filter((f) => !f.ignored), ign = d.findings.filter((f) => f.ignored);
+  const n = (sev) => open.filter((f) => f.sev === sev).length;
+  const hi = n("high"), me = n("medium"), lo = n("low");
+  const head = hi ? `${hi} serious issue${hi > 1 ? "s" : ""} to fix` : me ? `${me} thing${me > 1 ? "s" : ""} worth fixing` : lo ? "Looking good, a few small things" : "No issues found";
+  const dot = hi ? "bad" : me ? "warn" : "good";
+  const parts = [hi && `${hi} high`, me && `${me} medium`, lo && `${lo} low`].filter(Boolean).join(" · ");
+  let body = "";
+  for (const sev of ["high", "medium", "low", "info"]) {
+    const fs = open.filter((f) => f.sev === sev);
+    if (!fs.length) continue;
+    body += `<h3 style="margin:18px 0 8px">${SEV[sev][0]}</h3>` + fs.map(findingCard).join("");
+  }
+  $("#page").innerHTML = `<div class="updflow">
+    <div class="card row between"><div class="row" style="gap:14px;flex-wrap:nowrap;min-width:0"><span class="dot ${dot}" style="width:14px;height:14px;flex:none"></span><div><div style="font-size:20px;font-weight:650">${head}</div>
+      <div class="small muted">${parts ? parts + " · " : ""}${d.passed.length} checks passed · scanned ${esc(d.scanned)}</div></div></div>
+      <button class="btn" data-act="secScan" id="secScanBtn">Scan again</button></div>
+    ${body || `<div class="spacer"></div><div class="card empty">Nothing to fix right now.</div>`}
+    <div class="spacer"></div>
+    ${ign.length ? `<details class="card"><summary><h3 style="display:inline">Marked as OK</h3> <span class="small muted">${ign.length} · tap to show</span></summary><div class="spacer"></div>
+      ${ign.map((f) => `<div class="row between" style="padding:6px 0;border-bottom:1px solid var(--line)"><span class="small">${esc(f.title)}</span><button class="btn sm" data-act="secIgnore" data-id="${esc(f.id)}" data-v="0">Undo</button></div>`).join("")}</details><div class="spacer"></div>` : ""}
+    <details class="card"><summary><h3 style="display:inline">Passed checks</h3> <span class="small muted">${d.passed.length} · tap to show</span></summary><div class="spacer"></div>
+      ${d.passed.map((p) => `<div class="small" style="padding:4px 0"><span style="color:var(--good)">✓</span> ${esc(p.title)}</div>`).join("")}</details>
+    <p class="small muted">The scan reads your nginx config, certificates, Ubuntu settings and the last 24 hours of access logs. Nothing changes unless you press a Fix button.</p></div>`;
+  refreshBadges();
+}
+
+function findingCard(f) {
+  const link = f.link ? (f.link.page === "configs" && f.link.id ? `<a class="btn sm" href="#/configs/${encodeURIComponent(f.link.id)}" style="text-decoration:none">Open config</a>`
+    : f.link.page !== "configs" ? `<a class="btn sm" href="#/${f.link.page}" style="text-decoration:none">Go to ${f.link.page[0].toUpperCase() + f.link.page.slice(1)}</a>` : "") : "";
+  return `<details class="card finding" style="margin-bottom:8px"><summary><div class="row" style="flex-wrap:nowrap;gap:10px"><span class="badge ${SEV[f.sev][1]}">${f.sev}</span>
+    <div style="min-width:0"><b>${esc(f.title)}</b><div class="small muted" style="overflow:hidden;text-overflow:ellipsis">${esc(f.detail)}</div></div></div></summary>
+    <div style="margin-top:12px">${f.why ? `<div class="small"><b>Why it matters.</b> ${esc(f.why)}</div>` : ""}
+    ${f.fix ? `<div class="small" style="margin-top:8px"><b>How to fix.</b> ${esc(f.fix)}</div>` : ""}
+    ${f.commands ? `<div class="out" style="margin-top:10px">${esc(f.commands)}</div><div class="row" style="margin-top:6px"><span class="small muted grow">Run these on the server over SSH.</span>${copyBtn(f.commands)}</div>` : ""}
+    <div class="row" style="margin-top:12px">${f.fix_action ? `<button class="btn primary sm" data-act="secFix" data-id="${esc(f.id)}">Fix it</button>` : ""}${link}
+    <span class="grow"></span><button class="btn sm" data-act="secIgnore" data-id="${esc(f.id)}" data-v="1" title="Hide this finding; it won't count any more">Mark as OK</button></div></div></details>`;
+}
+ACT.secScan = async () => { const b = $("#secScanBtn"); b.disabled = true; b.textContent = "Scanning…"; try { renderSecurity(await api("/api/security/scan", {})); toast("Scan finished"); } catch (e) { toast(e.message, true); b.disabled = false; } };
+ACT.secFix = async (el) => {
+  const card = el.closest("details"), title = $("b", card).textContent;
+  if (!(await confirmBox("Fix this?", `<p><b>${esc(title)}</b></p><p class="small muted">Config changes are tested with nginx -t first and rolled back if anything fails. You can undo from the file's history.</p>`, "Fix it"))) return;
+  try { const r = await api("/api/security/fix", { id: el.dataset.id }); toast("Fixed"); renderSecurity(r); } catch (e) { showApplyError(e, "Fix not applied"); }
+};
+ACT.secIgnore = async (el) => { renderSecurity(await api("/api/security/ignore", { id: el.dataset.id, ignore: el.dataset.v === "1" })); };
+
+// ------------------------------------------------------------------ claude (MCP)
+async function pgClaude() { renderClaude(await api("/api/claude")); }
+
+function renderClaude(d) {
+  if (S.page !== "claude") return;
+  S.claude = d;
+  const pend = d.reviews.filter((r) => r.status === "pending"), done = d.reviews.filter((r) => r.status !== "pending");
+  const httpsPublic = /^https:\/\//.test(d.url) && !/:\d+\/mcp$/.test(d.url);
+  let html = `<div class="updflow">
+    <div class="card row between"><div style="min-width:0"><div style="font-size:20px;font-weight:650">Claude access is ${d.enabled ? "on" : "off"}</div>
+      <div class="small muted">Lets Claude read your nginx setup, troubleshoot, and suggest or make config changes through MCP.</div></div>
+      <label class="toggle"><input type="checkbox" data-chg="claudeOn" ${d.enabled ? "checked" : ""}><span></span></label></div>
+    ${pend.length ? `<div class="spacer"></div><div class="banner warn"><b>${pend.length} change${pend.length > 1 ? "s" : ""} by Claude waiting for you.</b> They're already live; keep or revert them below.</div>` : ""}`;
+  if (d.enabled) {
+    html += `<div class="spacer"></div><div class="card"><h3>Step 1 · Authenticator app</h3>
+      ${d.totp.confirmed ? `<div class="row between"><span><span class="dot good"></span>Set up. You'll enter its 6-digit code each time you approve a Claude connection.</span><button class="btn sm" data-act="totpNew" data-replace="1">Replace</button></div>`
+        : `<p class="small muted">Approving a Claude connection needs your NginxUI password <b>and</b> a code from an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password, Authy…).</p><div id="totpBox"><button class="btn primary" data-act="totpNew">Set up authenticator</button></div>`}</div>
+    <div class="spacer"></div><div class="card"><h3>Step 2 · Connect Claude</h3>
+      <div class="tabs row" style="gap:6px;margin-bottom:12px"><button class="btn sm ${S.claudeTab !== "code" ? "primary" : ""}" data-act="claudeTab" data-t="app">Claude app</button><button class="btn sm ${S.claudeTab === "code" ? "primary" : ""}" data-act="claudeTab" data-t="code">Claude Code</button></div>
+      ${S.claudeTab === "code" ? `
+        <p class="small muted">Make a key for Claude Code (terminal). It's shown once.</p>
+        <div class="grid g3"><label class="f"><span>Name</span><input type="text" id="tkName" value="Claude Code"></label>
+        <label class="f"><span>Access</span><select id="tkLevel">${Object.entries(d.levels).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select></label>
+        <label class="f"><span>For how long</span><select id="tkHours">${Object.entries(d.durations).map(([k, v]) => `<option value="${k}" ${k == 8 ? "selected" : ""}>${v}</option>`).join("")}</select></label></div>
+        <button class="btn primary" data-act="tokenNew">Create key</button><div id="tkOut"></div>`
+      : `<ol class="small" style="padding-left:18px;line-height:1.7"><li>In Claude, open <b>Settings → Connectors → Add custom connector</b>.</li><li>Paste this address and press <b>Connect</b>:</li></ol>
+        <div class="row" style="flex-wrap:nowrap"><div class="out grow" style="padding:8px 10px">${esc(d.url)}</div>${copyBtn(d.url)}</div>
+        <ol class="small" start="3" style="padding-left:18px;line-height:1.7"><li>An NginxUI page opens. Sign in, type your authenticator code, and choose what Claude may do and for how long.</li></ol>
+        ${httpsPublic ? "" : `<div class="banner info small"><b>The Claude app connects from Anthropic's cloud</b>, so this address must be reachable from the internet with a real HTTPS certificate (not NginxUI's self-signed one on port ${d.port}). Publish NginxUI through nginx on its own domain, then put that address below.
+          <div class="row" style="margin-top:8px"><button class="btn sm" data-act="publishSelf">Publish NginxUI with a wizard</button></div></div>`}
+        <label class="f" style="margin-top:10px"><span>Public address of NginxUI (optional)</span><div class="row" style="flex-wrap:nowrap"><input type="text" id="pubUrl" placeholder="https://nginxui.example.com" value="${esc(d.public_url)}"><button class="btn" data-act="pubUrlSave">Save</button></div>
+        <div class="hint">Leave empty to use the address you opened NginxUI with.</div></label>`}</div>
+    <div class="spacer"></div><div class="card"><h3>Connections</h3>${d.grants.length ? `<div class="tablewrap"><table><tr><th>Name</th><th>Access</th><th>Ends in</th><th>Last used</th><th></th></tr>${d.grants.map((g) => `<tr><td>${esc(g.name)}<div class="small muted">${esc(g.via)}</div></td><td class="small">${esc(g.level)}</td><td class="small">${g.expires_in_h < 48 ? `${g.expires_in_h} h` : `${Math.round(g.expires_in_h / 24)} days`}</td><td class="small muted">${esc(g.last_used || "never")}</td><td style="text-align:right"><button class="btn sm danger" data-act="revoke" data-id="${g.id}">Disconnect</button></td></tr>`).join("")}</table></div>` : `<div class="muted small">No active connections.</div>`}</div>`;
+  }
+  html += `<div class="spacer"></div><div class="card"><div class="row between"><h3 style="margin:0">Changes by Claude</h3>${pend.length > 1 ? `<button class="btn sm" data-act="reviewKeepAll">Keep all</button>` : ""}</div><div class="spacer"></div>
+    ${pend.length ? pend.map((r) => `<div class="row" style="padding:10px 0;border-bottom:1px solid var(--line);flex-wrap:nowrap"><div class="grow" style="min-width:0"><b class="mono">${esc(r.name)}</b> <span class="badge">${esc(r.tool.replace(/_/g, " "))}</span>
+      <div class="small">${esc(r.note)}</div><div class="small muted">${esc(r.who)} · ${esc(r.t)}</div></div>
+      <div class="row" style="flex:none"><button class="btn sm" data-act="reviewView" data-id="${r.id}">View</button><button class="btn sm danger" data-act="reviewDo" data-id="${r.id}" data-a="revert">Revert</button><button class="btn sm primary" data-act="reviewDo" data-id="${r.id}" data-a="keep">Keep</button></div></div>`).join("")
+      : `<div class="muted small">Nothing waiting. When Claude changes your config, each change shows up here.</div>`}
+    ${done.length ? `<details style="margin-top:10px"><summary class="small muted" style="cursor:pointer">Earlier decisions (${done.length})</summary>${done.map((r) => `<div class="small" style="padding:4px 0"><span class="badge ${r.status === "kept" ? "good" : "warn"}">${r.status}</span> <span class="mono">${esc(r.name)}</span> · ${esc(r.note)} <span class="muted">· ${esc(r.t)}</span></div>`).join("")}</details>` : ""}</div>
+    <p class="small muted">Claude can read configs, logs, stats and the security scan. With change access it can edit, create, enable/disable and restore config files and reload nginx: every change is tested first. It can't delete files, install updates or restart the server.</p></div>`;
+  $("#page").innerHTML = html;
+  setBadge("claude", pend.length || "", "warn");
+}
+CHG.claudeOn = async (el) => { try { renderClaude(await api("/api/claude/enable", { enabled: el.checked })); } catch (e) { el.checked = !el.checked; toast(e.message, true); } };
+ACT.claudeTab = (el) => { S.claudeTab = el.dataset.t; renderClaude(S.claude); };
+ACT.pubUrlSave = async () => { try { renderClaude(await api("/api/claude/url", { public_url: $("#pubUrl").value })); toast("Saved"); } catch (e) { toast(e.message, true); } };
+ACT.totpNew = async (el) => {
+  let pw = "";
+  if (el.dataset.replace) {
+    const m = modal(`<h2>Replace authenticator</h2><p class="small muted">The old code stops working. Enter your NginxUI password.</p><label class="f"><span>Password</span><input type="password" id="rpPw"></label><div class="row" style="justify-content:flex-end"><button class="btn" data-act="closeModal">Cancel</button><button class="btn primary" id="rpOk">Continue</button></div>`);
+    pw = await new Promise((res) => { $("#rpOk", m).onclick = () => { const v = $("#rpPw").value; closeModal(); res(v); }; });
+  }
+  try {
+    const r = await api("/api/claude/totp/new", { password: pw });
+    S.claude.totp.confirmed = false; renderClaude(S.claude);
+    $("#totpBox").innerHTML = `<p class="small"><b>On your phone:</b> tap the button to open your authenticator app, or add an account by hand with this key.</p>
+      <div class="row"><a class="btn" href="${esc(r.uri)}" style="text-decoration:none">Open in authenticator app</a></div>
+      <div class="row" style="margin-top:10px;flex-wrap:nowrap"><div class="out grow mono" style="letter-spacing:.12em;padding:8px 10px">${esc(r.secret.replace(/(.{4})/g, "$1 ").trim())}</div>${copyBtn(r.secret)}</div>
+      <label class="f" style="margin-top:12px"><span>Type the 6-digit code it shows</span><div class="row" style="flex-wrap:nowrap"><input type="text" id="totpCode" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456"><button class="btn primary" data-act="totpConfirm">Confirm</button></div></label>`;
+  } catch (e) { toast(e.message, true); }
+};
+ACT.totpConfirm = async () => { try { renderClaude(await api("/api/claude/totp/confirm", { code: $("#totpCode").value })); toast("Authenticator set up"); } catch (e) { toast(e.message, true); } };
+ACT.tokenNew = async () => {
+  try {
+    const r = await api("/api/claude/token", { name: $("#tkName").value, level: $("#tkLevel").value, hours: +$("#tkHours").value });
+    $("#tkOut").innerHTML = `<div class="spacer"></div><div class="banner good small">Key created. Copy it now; it won't be shown again.</div>
+      <p class="small">Run this on the computer where you use Claude Code:</p><div class="out">${esc(r.command)}</div><div class="row" style="margin-top:6px">${copyBtn(r.command, "Copy command")}</div>
+      <p class="small muted">If Claude Code can't reach the address, publish NginxUI through nginx with a real certificate (Claude app tab), then make a new key.</p>`;
+    const d = await api("/api/claude"); S.claude = d;
+  } catch (e) { toast(e.message, true); }
+};
+ACT.revoke = async (el) => { if (!(await confirmBox("Disconnect?", "Claude loses access right away.", "Disconnect", true))) return; renderClaude(await api("/api/claude/revoke", { id: el.dataset.id })); };
+ACT.reviewDo = async (el) => {
+  const rev = el.dataset.a === "revert";
+  if (rev && !(await confirmBox("Revert this change?", "The file goes back to how it was before Claude changed it. The old version is tested first.", "Revert", true))) return;
+  try { renderClaude(await api("/api/claude/review", { id: el.dataset.id, action: el.dataset.a })); toast(rev ? "Reverted" : "Kept"); closeModal(); }
+  catch (e) { showApplyError(e, "Revert failed"); }
+};
+ACT.reviewKeepAll = async () => { renderClaude(await api("/api/claude/review", { id: "all", action: "keep" })); toast("Kept all"); };
+ACT.reviewView = async (el) => {
+  const r = await api(`/api/claude/review?id=${el.dataset.id}`);
+  modal(`<div class="row between"><h2>${esc(r.name)}</h2><button class="btn sm" data-act="closeModal">Close</button></div>
+    <p class="small"><b>Claude's reason:</b> ${esc(r.note)}</p><p class="small muted">${esc(r.who)} · ${esc(r.tool)} · ${esc(r.t)}</p>
+    ${r.before === null ? `<p class="small">New file.</p>` : ""}${r.after === null ? `<p class="small">The file no longer exists.</p>` : diffHtml(r.before || "", r.after || "")}
+    <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn danger" data-act="reviewDo" data-id="${r.id}" data-a="revert">Revert</button><button class="btn primary" data-act="reviewDo" data-id="${r.id}" data-a="keep">Keep</button></div>`, true);
+};
+ACT.publishSelf = () => {
+  S.wiz = { type: "proxy", step: 0, name: "", nameTouched: false, enable: true, overwrite: false, certs: [],
+    p: { domains: "", upstream: `127.0.0.1:${S.claude.port}`, upstream_https: true, websocket: false, timeout: 300, max_body_mb: 10,
+      ssl: "existing", force_https: true, http2: true, hsts: false, basic_auth_users: [], allow_ips: "" } };
+  api("/api/certs").then((c) => { S.wiz.certs = c.certs; }).catch(() => {});
+  location.hash = "#/wizards/proxy";
+  toast("Enter a domain for NginxUI, then pick its certificate on the next step");
 };
 
 boot();
