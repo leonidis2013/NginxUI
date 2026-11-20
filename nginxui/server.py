@@ -33,7 +33,7 @@ import stats  # noqa: E402
 import security  # noqa: E402
 import mcp  # noqa: E402
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
 CONFIG_PATH = os.environ.get("NGINXUI_CONFIG", "/etc/nginxui/nginxui.json")
@@ -746,7 +746,25 @@ def api_selfupdate_apply(h, q, b, user):
     return {"job": j.id}
 
 
-def make_apply_job(scope, user):
+def make_apply_job(scope, user, with_self=False):
+    os_fn = _make_os_job(scope, user)
+
+    def fn(job):
+        ok = True
+        if scope != "none":
+            ok = os_fn(job)
+        if with_self:
+            job.log("")
+            job.log("NginxUI: updating to the newest version from GitHub")
+            if not ok:
+                job.log("  skipped because the system updates above had problems; fix those first.")
+                return False
+            ok = job_selfupdate(job)
+        return ok
+    return fn
+
+
+def _make_os_job(scope, user):
     def fn(job):
         was_active = nginx_active()
         job.log("Step 1: backing up nginx config")
@@ -1291,7 +1309,7 @@ def api_updates(h, q, b, user):
     return {**upd, "auto": auto_upgrades_state(), "nginx_pkg": nginx_package_info(),
             "system": system_info(), "allowed": CFG["allow_system_updates"],
             "self": api_selfupdate(h, q, b, user),
-            "job": {"id": cur.id, "title": cur.title, "done": cur.done} if cur else None}
+            "job": {"id": cur.id, "title": cur.title, "done": cur.done, "ok": cur.ok, "started": cur.started} if cur else None}
 
 
 def _require_updates():
@@ -1307,11 +1325,17 @@ def api_updates_check(h, q, b, user):
 
 def api_updates_apply(h, q, b, user):
     _require_updates()
-    scope = b.get("scope")
-    if scope not in ("all", "security", "nginx"):
+    scope = b.get("scope") or "none"
+    with_self = bool(b.get("self"))
+    if scope not in ("all", "security", "nginx", "none"):
         raise ApiError("Unknown update type")
-    titles = {"all": "Install all updates", "security": "Install security updates", "nginx": "Update nginx"}
-    j = start_job(titles[scope], make_apply_job(scope, user), user)
+    if scope == "none" and not with_self:
+        raise ApiError("Pick something to install")
+    if with_self and not self_source():
+        raise ApiError("NginxUI was not installed from a git clone, so it can't update itself")
+    titles = {"all": "Install all updates", "security": "Install security updates", "nginx": "Update nginx", "none": ""}
+    title = titles[scope] + (" + NginxUI" if titles[scope] and with_self else "Update NginxUI" if with_self else "")
+    j = start_job(title, make_apply_job(scope, user, with_self), user)
     return {"job": j.id}
 
 

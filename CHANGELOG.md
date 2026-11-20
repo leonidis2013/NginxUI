@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.1 — 2026-11-20
+- NginxUI updates are part of the main update flow: one Check looks for Ubuntu, nginx and NginxUI updates, and "Choose what to install" has an "Also update NginxUI" option (on by default) that runs last, after the system updates.
+- The task output window folds away: it's open while a task runs, folds up when it finishes, and the last task's output stays one tap away.
+
 ## 1.2.0 — 2026-11-20
 - NginxUI updates itself from the browser: **Check** on the Updates page fetches the GitHub clone you installed from, lists the new changes and version, and **Update NginxUI** pulls them, reinstalls and restarts (settings, users, history and backups kept). The regular update check now includes NginxUI too.
 - git runs as the clone's owner, so your GitHub sign-in is used and file ownership in the clone stays yours.

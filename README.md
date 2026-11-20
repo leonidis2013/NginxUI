@@ -41,7 +41,7 @@ sudo ./install.sh --no-tls        # plain HTTP on 127.0.0.1 only (put it behind 
 sudo ./install.sh uninstall       # remove the app; keeps settings, history and backups
 ```
 
-**Updating NginxUI:** open **Updates** and press **Check** next to NginxUI; if there's a new version, press **Update NginxUI**. It pulls from the git clone you installed from, reinstalls and restarts. (By hand: `git pull` then `sudo ./install.sh`.) Settings, users, history and backups are kept. Install from a git clone, as above, for this to work.
+**Updating NginxUI:** open **Updates** and press **Check**; if there's a new NginxUI version, leave **Also update NginxUI** ticked and press **Install**. It pulls from the git clone you installed from, reinstalls and restarts. (By hand: `git pull` then `sudo ./install.sh`.) Settings, users, history and backups are kept. Install from a git clone, as above, for this to work.
 
 ### Not sure which nginx you have?
 
