@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.0.1 — 2026-11-20
+- Renamed the app from LiveProxy to NginxUI (service `nginxui`, files in /opt/nginxui, /etc/nginxui, /var/lib/nginxui)
+
 ## 1.0.0 — 2026-11-20
 First release.
 - Config editor with syntax colors, enable/disable, safe save (nginx -t + automatic rollback), error-line highlight

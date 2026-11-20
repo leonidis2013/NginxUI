@@ -1,13 +1,13 @@
 [Unit]
-Description=LiveProxy - web UI for nginx
+Description=NginxUI - web UI for nginx
 After=network-online.target nginx.service
 Wants=network-online.target
 
 [Service]
 Type=simple
 # Runs as root because it edits /etc/nginx, reloads nginx and installs Ubuntu updates with apt.
-ExecStart=/usr/bin/python3 /opt/liveproxy/server.py
-Environment=LIVEPROXY_CONFIG=/etc/liveproxy/liveproxy.json
+ExecStart=/usr/bin/python3 /opt/nginxui/server.py
+Environment=NGINXUI_CONFIG=/etc/nginxui/nginxui.json
 Environment=PYTHONUNBUFFERED=1
 Restart=on-failure
 RestartSec=3

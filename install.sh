@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# LiveProxy installer for Ubuntu (22.04 / 24.04 and newer)
+# NginxUI installer for Ubuntu (22.04 / 24.04 and newer)
 #   sudo ./install.sh              install or upgrade
 #   sudo ./install.sh --port 9443  pick a different port
 #   sudo ./install.sh --no-tls     serve plain HTTP (only behind another HTTPS proxy)
-#   sudo ./install.sh uninstall    remove the app (keeps /etc/liveproxy and /var/lib/liveproxy)
+#   sudo ./install.sh uninstall    remove the app (keeps /etc/nginxui and /var/lib/nginxui)
 set -euo pipefail
 
-APP=/opt/liveproxy
-ETC=/etc/liveproxy
-DATA=/var/lib/liveproxy
-UNIT=/etc/systemd/system/liveproxy.service
+APP=/opt/nginxui
+ETC=/etc/nginxui
+DATA=/var/lib/nginxui
+UNIT=/etc/systemd/system/nginxui.service
 PORT=9443
 TLS=1
 FORCE=0
@@ -22,8 +22,8 @@ die() { printf '\033[1;31mxx\033[0m %s\n' "$*"; exit 1; }
 [[ $EUID -eq 0 ]] || die "Run with sudo: sudo ./install.sh"
 
 if [[ "${1:-}" == "uninstall" ]]; then
-  c "Removing LiveProxy"
-  systemctl disable --now liveproxy 2>/dev/null || true
+  c "Removing NginxUI"
+  systemctl disable --now nginxui 2>/dev/null || true
   rm -f "$UNIT"; systemctl daemon-reload
   rm -rf "$APP"
   c "Removed. Settings ($ETC) and history/backups ($DATA) were kept. Delete them by hand if you want."
@@ -49,23 +49,23 @@ python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' || die
 # --- what kind of nginx is this? ---
 if command -v docker >/dev/null && docker ps --format '{{.Image}}' 2>/dev/null | grep -q 'nginx-proxy-manager'; then
   w "Nginx Proxy Manager is running in Docker here."
-  w "LiveProxy manages the server's own nginx (apt package), not Nginx Proxy Manager's configs."
-  [[ $FORCE -eq 1 ]] || die "Re-run with --force if you also have plain nginx installed and want LiveProxy for it."
+  w "NginxUI manages the server's own nginx (apt package), not Nginx Proxy Manager's configs."
+  [[ $FORCE -eq 1 ]] || die "Re-run with --force if you also have plain nginx installed and want NginxUI for it."
 fi
 if ! command -v nginx >/dev/null; then
   w "nginx is not installed."
   read -r -p "Install nginx from Ubuntu now? [Y/n] " a
-  [[ "${a:-Y}" =~ ^[Yy]$ ]] || die "LiveProxy needs nginx."
+  [[ "${a:-Y}" =~ ^[Yy]$ ]] || die "NginxUI needs nginx."
   apt-get update -qq && apt-get install -y nginx
 fi
-[[ -d /etc/nginx/sites-available ]] || w "/etc/nginx/sites-available is missing - LiveProxy expects Ubuntu's nginx layout. conf.d files will still work."
+[[ -d /etc/nginx/sites-available ]] || w "/etc/nginx/sites-available is missing - NginxUI expects Ubuntu's nginx layout. conf.d files will still work."
 mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled /etc/nginx/conf.d
 
 # --- copy the app ---
 c "Installing app to $APP"
 mkdir -p "$APP"
 rm -rf "$APP/static"
-cp -r "$SRC/liveproxy/." "$APP/"
+cp -r "$SRC/nginxui/." "$APP/"
 cp "$SRC/VERSION" "$APP/VERSION" 2>/dev/null || true
 find "$APP" -name '__pycache__' -prune -exec rm -rf {} +
 chown -R root:root "$APP"; chmod -R go-w "$APP"
@@ -73,20 +73,20 @@ chown -R root:root "$APP"; chmod -R go-w "$APP"
 mkdir -p "$ETC" "$DATA"; chmod 700 "$DATA"
 
 # --- settings (kept on upgrade) ---
-if [[ ! -f "$ETC/liveproxy.json" ]]; then
-  c "Writing settings to $ETC/liveproxy.json"
+if [[ ! -f "$ETC/nginxui.json" ]]; then
+  c "Writing settings to $ETC/nginxui.json"
   if [[ $TLS -eq 1 ]]; then
-    cat > "$ETC/liveproxy.json" <<EOF
+    cat > "$ETC/nginxui.json" <<EOF
 {
   "bind": "0.0.0.0",
   "port": $PORT,
-  "tls_cert": "$ETC/tls/liveproxy.crt",
-  "tls_key": "$ETC/tls/liveproxy.key",
+  "tls_cert": "$ETC/tls/nginxui.crt",
+  "tls_key": "$ETC/tls/nginxui.key",
   "allow_system_updates": true
 }
 EOF
   else
-    cat > "$ETC/liveproxy.json" <<EOF
+    cat > "$ETC/nginxui.json" <<EOF
 {
   "bind": "127.0.0.1",
   "port": $PORT,
@@ -96,44 +96,44 @@ EOF
 }
 EOF
   fi
-  chmod 600 "$ETC/liveproxy.json"
+  chmod 600 "$ETC/nginxui.json"
 else
-  c "Keeping existing settings in $ETC/liveproxy.json"
+  c "Keeping existing settings in $ETC/nginxui.json"
 fi
 
 # --- self-signed certificate for the web UI ---
-if [[ $TLS -eq 1 && ! -f "$ETC/tls/liveproxy.crt" ]]; then
+if [[ $TLS -eq 1 && ! -f "$ETC/tls/nginxui.crt" ]]; then
   c "Creating a self-signed HTTPS certificate for the web UI"
   mkdir -p "$ETC/tls"
   IP=$(hostname -I 2>/dev/null | awk '{print $1}')
   openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-    -keyout "$ETC/tls/liveproxy.key" -out "$ETC/tls/liveproxy.crt" \
+    -keyout "$ETC/tls/nginxui.key" -out "$ETC/tls/nginxui.crt" \
     -subj "/CN=$(hostname)" \
     -addext "subjectAltName=DNS:$(hostname),DNS:localhost${IP:+,IP:$IP},IP:127.0.0.1" >/dev/null 2>&1
-  chmod 600 "$ETC/tls/liveproxy.key"
+  chmod 600 "$ETC/tls/nginxui.key"
 fi
 
 # --- systemd service ---
-c "Setting up the liveproxy service"
-cp "$SRC/systemd/liveproxy.service" "$UNIT"
+c "Setting up the nginxui service"
+cp "$SRC/systemd/nginxui.service" "$UNIT"
 systemctl daemon-reload
-systemctl enable liveproxy >/dev/null 2>&1
-systemctl restart liveproxy
+systemctl enable nginxui >/dev/null 2>&1
+systemctl restart nginxui
 sleep 1
-systemctl is-active --quiet liveproxy || { journalctl -u liveproxy -n 30 --no-pager; die "The service did not start (see above)."; }
+systemctl is-active --quiet nginxui || { journalctl -u nginxui -n 30 --no-pager; die "The service did not start (see above)."; }
 
-PORT_NOW=$(python3 -c "import json;print(json.load(open('$ETC/liveproxy.json')).get('port',9443))")
-SCHEME=https; grep -q '"tls_cert": ""' "$ETC/liveproxy.json" && SCHEME=http
+PORT_NOW=$(python3 -c "import json;print(json.load(open('$ETC/nginxui.json')).get('port',9443))")
+SCHEME=https; grep -q '"tls_cert": ""' "$ETC/nginxui.json" && SCHEME=http
 IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 
 if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
-  w "The ufw firewall is on. To reach LiveProxy from your LAN only, run e.g.:"
+  w "The ufw firewall is on. To reach NginxUI from your LAN only, run e.g.:"
   echo "    sudo ufw allow from 192.168.1.0/24 to any port $PORT_NOW proto tcp"
 fi
 
 echo
-c "LiveProxy $(cat "$APP/VERSION" 2>/dev/null || echo) is running"
+c "NginxUI $(cat "$APP/VERSION" 2>/dev/null || echo) is running"
 echo "    Open:  $SCHEME://${IP:-this-server}:$PORT_NOW"
 [[ $SCHEME == https ]] && echo "    Your browser will warn about the self-signed certificate the first time - that's expected."
 echo "    First visit asks you to create the admin login."
-echo "    Logs:  journalctl -u liveproxy -f"
+echo "    Logs:  journalctl -u nginxui -f"

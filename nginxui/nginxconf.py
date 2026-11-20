@@ -395,7 +395,7 @@ def _server_wrap(name, doms, ssl, body_lines, p):
     sn = " ".join(doms)
     log = [f"    access_log /var/log/nginx/{name}.access.log;",
            f"    error_log  /var/log/nginx/{name}.error.log;"]
-    out = [f"# Managed by LiveProxy wizard: {p.get('_wizard', '')}",
+    out = [f"# Managed by NginxUI wizard: {p.get('_wizard', '')}",
            f"# Site: {name}", ""]
     if ssl and ssl["force"]:
         out += ["server {",
@@ -554,7 +554,7 @@ def generate(kind, params, name):
     return WIZARDS[kind](params, name)
 
 
-STATUS_CONF = """# Managed by LiveProxy: local-only live connection stats
+STATUS_CONF = """# Managed by NginxUI: local-only live connection stats
 server {
     listen 127.0.0.1:%d;
     server_name localhost;

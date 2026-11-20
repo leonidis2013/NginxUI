@@ -1,4 +1,4 @@
-/* LiveProxy web UI - no external dependencies */
+/* NginxUI web UI - no external dependencies */
 "use strict";
 
 const S = { user: null, host: "", version: "", page: "dashboard", timers: [], files: [], cur: null, wiz: null };
@@ -14,7 +14,7 @@ async function api(path, body) {
   if (body !== undefined) {
     opt.method = "POST";
     opt.headers["Content-Type"] = "application/json";
-    opt.headers["X-LiveProxy"] = "1";
+    opt.headers["X-NginxUI"] = "1";
     opt.body = JSON.stringify(body);
   }
   const r = await fetch(path, opt);
@@ -84,7 +84,7 @@ async function boot() {
   clearTimers();
   let s;
   try { s = await (await fetch("/api/session", { credentials: "same-origin" })).json(); }
-  catch (e) { $("#root").innerHTML = `<div class="login"><div class="card">Cannot reach LiveProxy.</div></div>`; return; }
+  catch (e) { $("#root").innerHTML = `<div class="login"><div class="card">Cannot reach NginxUI.</div></div>`; return; }
   S.version = s.version; S.host = s.hostname;
   if (s.setup_needed) return renderSetup();
   if (!s.authenticated) return renderLogin();
@@ -95,7 +95,7 @@ async function boot() {
 
 function renderLogin() {
   $("#root").innerHTML = `<div class="login"><form class="card" id="lf">
-    <div class="brand"><div class="logo">LP</div><div><b>LiveProxy</b><span>${esc(S.host)}</span></div></div>
+    <div class="brand"><div class="logo">NU</div><div><b>NginxUI</b><span>${esc(S.host)}</span></div></div>
     <label class="f"><span>Username</span><input type="text" name="u" autocomplete="username" required></label>
     <label class="f"><span>Password</span><input type="password" name="p" autocomplete="current-password" required></label>
     <div id="lerr" class="small" style="color:#ff8f8f;min-height:18px"></div>
@@ -109,7 +109,7 @@ function renderLogin() {
 
 function renderSetup() {
   $("#root").innerHTML = `<div class="login"><form class="card" id="sf">
-    <div class="brand"><div class="logo">LP</div><div><b>Welcome to LiveProxy</b><span>${esc(S.host)}</span></div></div>
+    <div class="brand"><div class="logo">NU</div><div><b>Welcome to NginxUI</b><span>${esc(S.host)}</span></div></div>
     <p class="muted">Create the admin account for this web UI. This is separate from your Ubuntu login.</p>
     <label class="f"><span>Username</span><input type="text" name="u" value="admin" required></label>
     <label class="f"><span>Password (10+ characters)</span><input type="password" name="p" autocomplete="new-password" required></label>
@@ -134,7 +134,7 @@ const PAGES = [
 function renderShell() {
   $("#root").innerHTML = `<div class="app">
     <aside class="side" id="side">
-      <div class="brand"><div class="logo">LP</div><div><b>LiveProxy</b><span>${esc(S.host)}</span></div></div>
+      <div class="brand"><div class="logo">NU</div><div><b>NginxUI</b><span>${esc(S.host)}</span></div></div>
       <nav class="nav">${PAGES.map(([k, l, i]) => `<a href="#/${k}" data-nav="${k}"><span class="ico">${i}</span>${l}<span class="badge hidden" id="nb-${k}"></span></a>`).join("")}</nav>
       <div class="foot">Signed in as <b>${esc(S.user)}</b><br><a href="#" data-act="logout">Log out</a> · v${esc(S.version)}</div>
     </aside>
@@ -252,7 +252,7 @@ ACT.testConfig = async () => {
 };
 ACT.reloadNginx = async () => { try { await api("/api/nginx/reload", {}); toast("nginx reloaded"); } catch (e) { showApplyError(e, "Reload failed"); } };
 ACT.enableLive = async () => {
-  const ok = await confirmBox("Turn on live stats", `<p>LiveProxy will add <span class="mono">conf.d/liveproxy-status.conf</span>, a tiny status page on <span class="mono">127.0.0.1</span> that nothing outside this server can reach. The config is tested before it goes live.</p>`, "Turn on");
+  const ok = await confirmBox("Turn on live stats", `<p>NginxUI will add <span class="mono">conf.d/nginxui-status.conf</span>, a tiny status page on <span class="mono">127.0.0.1</span> that nothing outside this server can reach. The config is tested before it goes live.</p>`, "Turn on");
   if (!ok) return;
   try { await api("/api/live/enable", {}); toast("Live stats on"); route(); } catch (e) { showApplyError(e); }
 };
@@ -278,7 +278,7 @@ function renderFileList(deleted) {
     html += `<div class="grp">${label}</div>`;
     html += fs.map((f) => `<div class="fitem ${S.cur && S.cur.id === f.id ? "sel" : ""}" data-act="openFile" data-id="${esc(f.id)}">
       <span class="dot ${f.enabled === null ? "" : f.enabled ? "good" : ""}"></span>
-      <span class="n">${esc(f.name)}</span>${f.managed ? `<span class="badge info" title="Created by a LiveProxy wizard">wizard</span>` : ""}
+      <span class="n">${esc(f.name)}</span>${f.managed ? `<span class="badge info" title="Created by a NginxUI wizard">wizard</span>` : ""}
       ${f.enabled !== null && g !== "enabled" ? `<label class="toggle" title="${f.enabled ? "Enabled" : "Disabled"}" data-act="noop"><input type="checkbox" data-chg="toggleFile" data-id="${esc(f.id)}" ${f.enabled ? "checked" : ""}><span></span></label>` : ""}</div>`).join("");
   }
   if (!S.files.length) html += `<div class="empty">No config files found.</div>`;
@@ -449,7 +449,7 @@ function diffHtml(a, b) {
 ACT.showHistory = async () => {
   const h = (await api(`/api/history?id=${encodeURIComponent(S.cur.id)}`)).history;
   const m = modal(`<div class="row between"><h2>History · ${esc(S.cur.name)}</h2><button class="btn sm" data-act="closeModal">Close</button></div>
-    ${h.length ? `<div class="tablewrap"><table><tr><th>When</th><th>Who</th><th>What</th><th></th></tr>${h.map((v) => `<tr class="click" data-act="viewVersion" data-v="${v.v}"><td class="small" style="white-space:nowrap">${esc(v.t)}</td><td class="small">${esc(v.user)}</td><td class="small">${esc(v.note)} <span class="badge">${esc(v.action)}</span></td><td><button class="btn sm">View</button></td></tr>`).join("")}</table></div>` : `<div class="empty">No history yet. Every save made in LiveProxy is kept here, and the original file is saved the first time you edit it.</div>`}
+    ${h.length ? `<div class="tablewrap"><table><tr><th>When</th><th>Who</th><th>What</th><th></th></tr>${h.map((v) => `<tr class="click" data-act="viewVersion" data-v="${v.v}"><td class="small" style="white-space:nowrap">${esc(v.t)}</td><td class="small">${esc(v.user)}</td><td class="small">${esc(v.note)} <span class="badge">${esc(v.action)}</span></td><td><button class="btn sm">View</button></td></tr>`).join("")}</table></div>` : `<div class="empty">No history yet. Every save made in NginxUI is kept here, and the original file is saved the first time you edit it.</div>`}
     <div id="hv"></div>`, true);
 };
 ACT.viewVersion = async (el) => {
@@ -799,7 +799,7 @@ async function pgUpdates() {
   const sec = pk.filter((p) => p.security).length, ngx = pk.filter((p) => p.nginx).length;
   const ngUpd = np.installed && np.candidate && np.installed !== np.candidate && np.installed !== "(none)";
   $("#pactions").innerHTML = d.allowed ? `<button class="btn" data-act="updCheck">Check for updates</button>` : "";
-  $("#page").innerHTML = `${!d.allowed ? `<div class="banner warn">System updates are turned off in the LiveProxy config file (allow_system_updates).</div>` : ""}
+  $("#page").innerHTML = `${!d.allowed ? `<div class="banner warn">System updates are turned off in the NginxUI config file (allow_system_updates).</div>` : ""}
     ${sy.reboot_required ? `<div class="banner warn row between"><span><b>Reboot required</b> to finish installing updates${sy.reboot_pkgs.length ? ` (${esc(sy.reboot_pkgs.join(", "))})` : ""}. Sites are offline for a minute or two while it restarts.</span><button class="btn danger" data-act="reboot">Reboot server</button></div>` : ""}
     <div class="grid g3">
       <div class="card"><h3>Ubuntu</h3><dl class="kv small"><dt>System</dt><dd>${esc(sy.os)}</dd><dt>Kernel</dt><dd>${esc(sy.kernel)}</dd><dt>Uptime</dt><dd>${fmtDur(sy.uptime_s)}</dd><dt>Last check</dt><dd>${esc(d.checked || "never")}</dd></dl>
@@ -814,7 +814,7 @@ async function pgUpdates() {
     <div class="card hidden" id="jobCard"><div class="row between"><h3 id="jobTitle" style="margin:0"></h3><span id="jobState"></span></div><div class="spacer"></div><div class="out console" id="jobOut"></div></div>
     <div class="spacer"></div>
     <div class="card"><h3>Packages</h3>${pk.length ? `<div class="tablewrap"><table><tr><th>Package</th><th>Current</th><th>New</th><th></th></tr>${pk.sort((a, b) => b.security - a.security || b.nginx - a.nginx || a.name.localeCompare(b.name)).map((p) => `<tr><td class="mono">${esc(p.name)}</td><td class="mono small muted">${esc(p.old)}</td><td class="mono small">${esc(p.new)}</td><td>${p.security ? '<span class="badge bad">security</span>' : ""} ${p.nginx ? '<span class="badge info">nginx</span>' : ""}</td></tr>`).join("")}</table></div>` : `<div class="empty">${d.checked ? "Everything is up to date." : "Press <b>Check for updates</b> to see what's available."}</div>`}</div>
-    <p class="small muted">Before installing, LiveProxy backs up /etc/nginx. Your edited config files are always kept (apt is told to keep your versions), and nginx is tested and started again afterwards.</p>`;
+    <p class="small muted">Before installing, NginxUI backs up /etc/nginx. Your edited config files are always kept (apt is told to keep your versions), and nginx is tested and started again afterwards.</p>`;
   if (d.job && !d.job.done) followJob(d.job.id);
 }
 CHG.autoUpd = async (el) => { try { await api("/api/updates/auto", { enabled: el.checked }); toast(`Automatic security updates ${el.checked ? "on" : "off"}`); } catch (e) { el.checked = !el.checked; toast(e.message, true); } };
@@ -882,7 +882,7 @@ async function pgSettings() {
       <p class="small muted">Every user has full access. Five wrong passwords from one address locks it out for 5 minutes.</p></div></div>
     <div class="spacer"></div>
     <div class="card"><h3>Activity log</h3><div class="tablewrap" style="max-height:420px;overflow:auto"><table><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th></tr>${a.entries.map((e) => `<tr><td class="small" style="white-space:nowrap">${esc(e.t)}</td><td class="small">${esc(e.user)}</td><td class="small"><span class="dot ${e.ok ? "good" : "bad"}"></span>${esc(e.action)}</td><td class="small">${esc(e.target)}</td></tr>`).join("")}</table></div></div>
-    <div class="spacer"></div><div class="card small muted">LiveProxy v${esc(S.version)} · settings file <span class="mono">/etc/liveproxy/liveproxy.json</span> · service <span class="mono">sudo systemctl restart liveproxy</span></div>`;
+    <div class="spacer"></div><div class="card small muted">NginxUI v${esc(S.version)} · settings file <span class="mono">/etc/nginxui/nginxui.json</span> · service <span class="mono">sudo systemctl restart nginxui</span></div>`;
   $("#pwF").onsubmit = async (ev) => {
     ev.preventDefault(); const f = ev.target;
     if (f.p.value !== f.p2.value) return toast("New passwords do not match", true);

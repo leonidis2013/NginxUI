@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""LiveProxy - web UI for an nginx reverse proxy on Ubuntu.
+"""NginxUI - web UI for an nginx reverse proxy on Ubuntu.
 
 Runs as a systemd service (as root, because it edits /etc/nginx, reloads nginx and runs apt).
 Standard library only: works with the Python 3 that ships with Ubuntu 22.04+.
@@ -31,26 +31,26 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import nginxconf  # noqa: E402
 import stats  # noqa: E402
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
-CONFIG_PATH = os.environ.get("LIVEPROXY_CONFIG", "/etc/liveproxy/liveproxy.json")
+CONFIG_PATH = os.environ.get("NGINXUI_CONFIG", "/etc/nginxui/nginxui.json")
 
 DEFAULTS = {
     "bind": "0.0.0.0",
     "port": 9443,
-    "tls_cert": "/etc/liveproxy/tls/liveproxy.crt",
-    "tls_key": "/etc/liveproxy/tls/liveproxy.key",
+    "tls_cert": "/etc/nginxui/tls/nginxui.crt",
+    "tls_key": "/etc/nginxui/tls/nginxui.key",
     "nginx_bin": "nginx",
     "nginx_dir": "/etc/nginx",
     "sites_available": "/etc/nginx/sites-available",
     "sites_enabled": "/etc/nginx/sites-enabled",
     "conf_d": "/etc/nginx/conf.d",
     "snippets": "/etc/nginx/snippets",
-    "htpasswd_dir": "/etc/nginx/liveproxy-htpasswd",
+    "htpasswd_dir": "/etc/nginx/nginxui-htpasswd",
     "log_dir": "/var/log/nginx",
     "letsencrypt_dir": "/etc/letsencrypt",
-    "data_dir": "/var/lib/liveproxy",
+    "data_dir": "/var/lib/nginxui",
     "reload_cmd": ["systemctl", "reload", "nginx"],
     "active_cmd": ["systemctl", "is-active", "nginx"],
     "start_cmd": ["systemctl", "start", "nginx"],
@@ -261,7 +261,7 @@ def _finfo(g, n, p, enabled):
     st = os.stat(p)
     head = read_text(p)[:400]
     return {"id": f"{g}:{n}", "group": g, "group_label": GROUPS[g][1], "name": n, "enabled": enabled,
-            "size": st.st_size, "mtime": int(st.st_mtime), "managed": "Managed by LiveProxy" in head,
+            "size": st.st_size, "mtime": int(st.st_mtime), "managed": "Managed by NginxUI" in head,
             "history": len(history_list(f"{g}:{n}"))}
 
 
@@ -405,9 +405,9 @@ def safe_apply(ops, user, note, history=None):
 
 
 def ensure_original(fid, path):
-    """Store the pre-LiveProxy version of a file once, so it can always be restored."""
+    """Store the pre-NginxUI version of a file once, so it can always be restored."""
     if not history_list(fid) and os.path.isfile(path):
-        history_add(fid, read_text(path), "system", "Original (before first edit in LiveProxy)", "original")
+        history_add(fid, read_text(path), "system", "Original (before first edit in NginxUI)", "original")
 
 
 # ---------------------------------------------------------------- htpasswd
@@ -700,7 +700,7 @@ def create_backup(reason, user):
     with CONF_LOCK, tarfile.open(path, "w:gz") as t:
         t.add(CFG["nginx_dir"], arcname="nginx")
         if os.path.isdir(CFG["htpasswd_dir"]) and not CFG["htpasswd_dir"].startswith(CFG["nginx_dir"] + "/"):
-            t.add(CFG["htpasswd_dir"], arcname="liveproxy-htpasswd")
+            t.add(CFG["htpasswd_dir"], arcname="nginxui-htpasswd")
     os.chmod(path, 0o600)
     autos = sorted(n for n in os.listdir(os.path.join(DATA, "backups")) if BK_RE.match(n) and "-manual" not in n)
     for n in autos[:-30]:
@@ -741,7 +741,7 @@ def restore_backup(name, user):
     parent = os.path.dirname(nd)
     with CONF_LOCK:
         create_backup("before-restore", user)
-        tmp = os.path.join(parent, f".liveproxy-restore-{secrets.token_hex(4)}")
+        tmp = os.path.join(parent, f".nginxui-restore-{secrets.token_hex(4)}")
         os.makedirs(tmp)
         with tarfile.open(src, "r:gz") as t:
             members = list(_safe_members(t))
@@ -751,7 +751,7 @@ def restore_backup(name, user):
         if not os.path.isdir(new):
             shutil.rmtree(tmp, ignore_errors=True)
             raise ApiError("Backup does not contain an nginx folder")
-        old = f"{nd}.liveproxy-prev"
+        old = f"{nd}.nginxui-prev"
         if os.path.exists(old):
             shutil.rmtree(old)
         os.rename(nd, old)
@@ -810,7 +810,7 @@ def environment():
     if shutil.which("docker"):
         rc, out = run(["docker", "ps", "--format", "{{.Image}} {{.Names}}"], timeout=10)
         if rc == 0 and re.search(r"jc21/nginx-proxy-manager|nginx-proxy-manager", out):
-            warn.append("Nginx Proxy Manager is running in Docker on this server. LiveProxy manages the "
+            warn.append("Nginx Proxy Manager is running in Docker on this server. NginxUI manages the "
                         "host's own nginx, not Nginx Proxy Manager's configs.")
     return {"nginx_found": bool(nb), "warnings": warn}
 
@@ -1147,9 +1147,9 @@ def live_stats():
 
 
 def api_live_enable(h, q, b, user):
-    p = os.path.join(CFG["conf_d"], "liveproxy-status.conf")
+    p = os.path.join(CFG["conf_d"], "nginxui-status.conf")
     return safe_apply([("write", p, nginxconf.STATUS_CONF % int(CFG["status_port"]))], user,
-                      "Enabled live connection stats", [("conf:liveproxy-status.conf",
+                      "Enabled live connection stats", [("conf:nginxui-status.conf",
                                                          nginxconf.STATUS_CONF % int(CFG["status_port"]), "create")])
 
 
@@ -1184,7 +1184,7 @@ def api_updates(h, q, b, user):
 
 def _require_updates():
     if not CFG["allow_system_updates"]:
-        raise ApiError("System updates are turned off in /etc/liveproxy/liveproxy.json", 403)
+        raise ApiError("System updates are turned off in /etc/nginxui/nginxui.json", 403)
 
 
 def api_updates_check(h, q, b, user):
@@ -1369,12 +1369,12 @@ SEC_HEADERS = {
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LiveProxy"
+    server_version = "NginxUI"
     sys_version = ""
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
-        if os.environ.get("LIVEPROXY_DEBUG"):
+        if os.environ.get("NGINXUI_DEBUG"):
             sys.stderr.write("%s %s\n" % (self.client_address[0], fmt % args))
 
     def _send(self, status, body, ctype, extra=None):
@@ -1423,7 +1423,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(401, {"error": "Please log in"})
         body = {}
         if method == "POST":
-            if self.headers.get("X-LiveProxy") != "1":
+            if self.headers.get("X-NginxUI") != "1":
                 return self._json(403, {"error": "Missing request header"})
             n = int(self.headers.get("Content-Length") or 0)
             if n > 2_000_000:
@@ -1480,7 +1480,7 @@ def main():
         srv.socket = ctx.wrap_socket(srv.socket, server_side=True, do_handshake_on_connect=False)
         srv.is_tls = True
     scheme = "https" if srv.is_tls else "http"
-    print(f"LiveProxy {VERSION} listening on {scheme}://{CFG['bind']}:{CFG['port']}", flush=True)
+    print(f"NginxUI {VERSION} listening on {scheme}://{CFG['bind']}:{CFG['port']}", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
