@@ -33,7 +33,7 @@ import stats  # noqa: E402
 import security  # noqa: E402
 import mcp  # noqa: E402
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
 CONFIG_PATH = os.environ.get("NGINXUI_CONFIG", "/etc/nginxui/nginxui.json")
@@ -1871,6 +1871,22 @@ class Handler(BaseHTTPRequestHandler):
     def _dispatch(self, method):
         u = urlparse(self.path)
         path = u.path
+        # Always read the whole request body before answering. If an early reply (401, 404, …) left it
+        # unread on a kept-alive connection, the next request would start in the middle of it ("Bad
+        # request syntax"), which is what broke Claude Code's first connection.
+        self._raw = b""
+        if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
+            self.close_connection = True
+            return self._json(411, {"error": "Send a Content-Length"})
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = -1
+        if n < 0 or n > 4_000_000:
+            self.close_connection = True
+            return self._json(413 if n > 0 else 400, {"error": "Bad or too large request body"})
+        if n:
+            self._raw = self.rfile.read(n)
         if method == "GET" and path in STATIC:
             fn, ctype = STATIC[path]
             try:
@@ -1898,10 +1914,9 @@ class Handler(BaseHTTPRequestHandler):
         if method == "POST":
             if self.headers.get("X-NginxUI") != "1":
                 return self._json(403, {"error": "Missing request header"})
-            n = int(self.headers.get("Content-Length") or 0)
-            if n > 2_000_000:
+            if len(self._raw) > 2_000_000:
                 return self._json(413, {"error": "Request too large"})
-            raw = self.rfile.read(n) if n else b"{}"
+            raw = self._raw or b"{}"
             try:
                 body = json.loads(raw or b"{}")
                 if not isinstance(body, dict):

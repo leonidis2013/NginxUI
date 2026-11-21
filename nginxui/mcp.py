@@ -433,11 +433,8 @@ def handle_mcp(h, method, u):
         return _unauth(h, {"no_token": "No key was sent", "expired": "This key has expired",
                            "bad_token": "Unknown key (revoked, or copied wrong)"}[why])
     log_attempt(ip, "ok", "", grant["name"])
-    n = int(h.headers.get("Content-Length") or 0)
-    if n > 4_000_000:
-        return h._json(413, {"error": "too large"})
     try:
-        msg = json.loads(h.rfile.read(n) or b"null")
+        msg = json.loads(h._raw or b"null")
     except ValueError:
         return h._json(400, {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}})
     msgs = msg if isinstance(msg, list) else [msg]
@@ -514,8 +511,7 @@ def handle_wellknown(h, method, u):
 
 
 def _read_body(h):
-    n = int(h.headers.get("Content-Length") or 0)
-    raw = h.rfile.read(min(n, 100_000)) if n else b""
+    raw = h._raw[:100_000]
     ct = h.headers.get("Content-Type", "")
     if "json" in ct:
         try:

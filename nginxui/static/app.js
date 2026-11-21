@@ -1163,6 +1163,7 @@ ACT.tokenNew = async () => {
   try {
     const r = await api("/api/claude/token", { name: $("#tkName").value, level: $("#tkLevel").value, hours: +$("#tkHours").value });
     S.ccKey = r.token; S.ccKeyName = $("#tkName").value.trim() || "Claude Code"; S.ccKeyAt = Date.now() / 1000;
+    try { sessionStorage.setItem("nginxui-cckey", JSON.stringify({ k: S.ccKey, n: S.ccKeyName, t: S.ccKeyAt })); } catch (e) { /* private mode */ }
     S.claude = await api("/api/claude");
     $("#ccGuide").innerHTML = claudeCodeGuide(S.claude);
     toast("Key created and filled into the steps below");
@@ -1211,6 +1212,9 @@ function ccLiveHtml() {
 }
 
 function claudeCodeGuide(d) {
+  if (!S.ccKey) {
+    try { const v = JSON.parse(sessionStorage.getItem("nginxui-cckey") || "null"); if (v) { S.ccKey = v.k; S.ccKeyName = v.n; S.ccKeyAt = v.t; } } catch (e) { /* ignore */ }
+  }
   const os = S.ccOS || (S.ccOS = ccDetectOS());
   const ci = S.certInfo || { tls: false };
   const url = d.url;
@@ -1248,7 +1252,7 @@ function claudeCodeGuide(d) {
   }
   steps.push(ccStep(++n, "Add NginxUI to Claude Code",
     `${needCert ? "In the <b>new</b> window, paste" : `Open ${term} and paste`} both lines. The first one may say it found nothing to remove; that's fine.
-    ${cmdBlock(addCmd, S.ccKey ? "Your key is already in it." : "Do step 1 first: the key goes where it says PASTE-YOUR-KEY.")}`));
+    ${S.ccKey ? cmdBlock(addCmd, "Your key is already in it.") : `<div class="banner warn small" style="margin-top:8px"><b>Create a key in step 1 first.</b> The command appears here with your key already in it. (A key made earlier can't be shown again; just make a new one.)</div>`}`));
   steps.push(ccStep(++n, "Check the connection",
     `Paste this. It should list <span class="mono">nginxui</span> with <b>✔ Connected</b>.${cmdBlock("claude mcp list")}
     <div class="card tight" id="ccLive" style="margin-top:8px">${ccLiveHtml()}</div>`));
@@ -1266,7 +1270,7 @@ function claudeCodeGuide(d) {
       <p><b>See exactly what Claude Code is doing</b>: run <span class="mono">claude --debug</span>, then look in the newest file in <span class="mono">~/.claude/debug/</span>. With step 2 working, it contains a line starting <span class="mono">CA certs: Appended extra certificates from NODE_EXTRA_CA_CERTS</span>.</p>
     </div></details>`;
 }
-ACT.ccNewKey = () => { S.ccKey = null; S.ccKeyAt = null; $("#ccGuide").innerHTML = claudeCodeGuide(S.claude); };
+ACT.ccNewKey = () => { S.ccKey = null; S.ccKeyAt = null; try { sessionStorage.removeItem("nginxui-cckey"); } catch (e) { /* ignore */ } $("#ccGuide").innerHTML = claudeCodeGuide(S.claude); };
 ACT.revoke = async (el) => { if (!(await confirmBox("Disconnect?", "Claude loses access right away.", "Disconnect", true))) return; renderClaude(await api("/api/claude/revoke", { id: el.dataset.id })); };
 ACT.reviewDo = async (el) => {
   const rev = el.dataset.a === "revert";

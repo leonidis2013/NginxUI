@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.1 — 2026-11-21
+- Fix: Claude Code failed with "HTTP 400 … Bad request syntax". When NginxUI answered a request early (for example 401 for a wrong key) it didn't read the request body, so the next request on the same connection was garbled. NginxUI now always reads the whole request first.
+- Claude Code guide: the step 3 command only appears once you have a key (no more copying the placeholder), and the new key survives a page reload in that browser tab.
+
 ## 1.3.0 — 2026-11-21
 - **Step-by-step Claude Code setup** on the Claude page (macOS / Windows / Linux): create a key, trust NginxUI's certificate, add the server, check it. Every command is ready to copy with your key and address already filled in.
 - **Live connection check**: the guide shows what actually reached NginxUI from your computer (connected, certificate not trusted, no key, unknown or expired key) and what to do about each.
