@@ -33,7 +33,7 @@ import stats  # noqa: E402
 import security  # noqa: E402
 import mcp  # noqa: E402
 
-VERSION = "1.2.1"
+VERSION = "1.3.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
 CONFIG_PATH = os.environ.get("NGINXUI_CONFIG", "/etc/nginxui/nginxui.json")
@@ -1648,7 +1648,68 @@ def api_claude_token(h, q, b, user):
     tok, gid = mcp.new_grant((b.get("name") or "Claude Code").strip(), level, hours, "token")
     url = mcp.base_url(h) + "/mcp"
     return {"token": tok, "url": url,
-            "command": f'claude mcp add --transport http nginxui {url} --header "Authorization: Bearer {tok}"'}
+            "command": f'claude mcp add --transport http nginxui {url} --scope user --header "Authorization: Bearer {tok}"'}
+
+
+def cert_info(host=""):
+    p = CFG.get("tls_cert") or ""
+    if not p or not os.path.isfile(p):
+        return {"tls": False}
+    rc, out = run(["openssl", "x509", "-in", p, "-noout", "-fingerprint", "-sha256", "-enddate", "-ext", "subjectAltName"], 10)
+    names = re.findall(r"(?:DNS|IP Address):([^,\s]+)", out)
+    fp = re.search(r"Fingerprint=([0-9A-F:]+)", out)
+    end = re.search(r"notAfter=(.+)", out)
+    h = (host or "").split(":")[0].strip("[]").lower()
+    return {"tls": True, "names": names, "fingerprint": fp.group(1) if fp else None,
+            "expires": end.group(1).strip() if end else None, "host": h,
+            "host_ok": (not h) or h in [n.lower() for n in names]}
+
+
+def api_claude_certinfo(h, q, b, user):
+    return cert_info(q.get("host") or h.headers.get("Host", ""))
+
+
+def host_ips():
+    rc, out = run(["hostname", "-I"], 5)
+    return [ip for ip in out.split() if re.match(r"^[0-9.]+$|^[0-9a-fA-F:]+$", ip) and not ip.startswith("fe80")]
+
+
+def api_claude_cert_remake(h, q, b, user):
+    p, k = CFG.get("tls_cert") or "", CFG.get("tls_key") or ""
+    if not p or not k:
+        raise ApiError("NginxUI isn't set up with its own certificate (tls_cert/tls_key are empty)")
+    extra = (b.get("host") or "").split(":")[0].strip("[]").lower()
+    if extra and not re.match(r"^[a-z0-9.\-]{1,253}$|^[0-9a-f:]+$", extra):
+        raise ApiError("That address doesn't look like a hostname or IP")
+    hn = socket.gethostname()
+    dns = {hn, f"{hn}.local", "localhost"}
+    ips = set(host_ips()) | {"127.0.0.1"}
+    if extra:
+        (ips if re.match(r"^[0-9.]+$|^[0-9a-f:]+$", extra) else dns).add(extra)
+    san = ",".join([f"DNS:{d}" for d in sorted(dns)] + [f"IP:{i}" for i in sorted(ips)])
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    rc, out = run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "825",
+                   "-keyout", k + ".new", "-out", p + ".new", "-subj", f"/CN={hn}",
+                   "-addext", f"subjectAltName={san}", "-addext", "basicConstraints=critical,CA:TRUE",
+                   "-addext", "keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign",
+                   "-addext", "extendedKeyUsage=serverAuth"], 60)
+    if rc != 0:
+        raise ApiError("openssl failed: " + out[-300:])
+    os.chmod(k + ".new", 0o600)
+    os.replace(k + ".new", k)
+    os.replace(p + ".new", p)
+    audit(user, "claude-cert-remake", san)
+
+    def restart():
+        time.sleep(1.0)
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    threading.Thread(target=restart, daemon=True).start()
+    return {"ok": True, "names": [x.split(":", 1)[1] for x in san.split(",")], "restarting": True}
+
+
+def api_claude_attempts(h, q, b, user):
+    with mcp.LOCK:
+        return {"attempts": [dict(a) for a in mcp.ATTEMPTS[:25]], "now": now_iso()}
 
 
 def api_claude_revoke(h, q, b, user):
@@ -1738,6 +1799,9 @@ ROUTES = {
     ("POST", "/api/claude/totp/confirm"): (api_claude_totp_confirm, True),
     ("POST", "/api/claude/token"): (api_claude_token, True),
     ("POST", "/api/claude/revoke"): (api_claude_revoke, True),
+    ("GET", "/api/claude/certinfo"): (api_claude_certinfo, True),
+    ("POST", "/api/claude/cert/remake"): (api_claude_cert_remake, True),
+    ("GET", "/api/claude/attempts"): (api_claude_attempts, True),
     ("POST", "/api/claude/review"): (api_claude_review, True),
     ("GET", "/api/claude/review"): (api_claude_review_get, True),
 }
@@ -1760,6 +1824,19 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "NginxUI"
     sys_version = ""
     protocol_version = "HTTP/1.1"
+
+    def handle(self):
+        # A client that doesn't trust NginxUI's certificate aborts the TLS handshake. Record it,
+        # because "Claude Code can't connect" is almost always this.
+        try:
+            super().handle()
+        except ssl.SSLError as e:
+            msg = str(e)
+            if any(k in msg for k in ("UNKNOWN_CA", "unknown ca", "BAD_CERTIFICATE", "bad certificate",
+                                      "CERTIFICATE_UNKNOWN", "certificate unknown")):
+                mcp.log_attempt(self.client_address[0], "tls", msg[:160])
+        except (ConnectionResetError, BrokenPipeError):
+            pass
 
     def log_message(self, fmt, *args):
         if os.environ.get("NGINXUI_DEBUG"):
@@ -1803,6 +1880,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, b"not found", "text/plain")
         if method == "GET" and path == "/api/backups/download":
             return self._download(u)
+        if method == "GET" and path == "/nginxui.pem":
+            return self._cert_download()
         if path in mcp.RAW:
             try:
                 return mcp.RAW[path](self, method, u)
@@ -1847,6 +1926,14 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # pragma: no cover
             traceback.print_exc()
             self._json(500, {"error": f"Internal error: {e}"})
+
+    def _cert_download(self):
+        p = CFG.get("tls_cert") or ""
+        if not getattr(self.server, "is_tls", False) or not os.path.isfile(p):
+            return self._json(404, {"error": "NginxUI is not using its own certificate"})
+        with open(p, "rb") as f:
+            data = f.read()
+        self._send(200, data, "application/x-pem-file", {"Content-Disposition": 'attachment; filename="nginxui.pem"'})
 
     def _download(self, u):
         if not session_user(self):

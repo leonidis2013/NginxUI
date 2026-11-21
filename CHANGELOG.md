@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0 — 2026-11-21
+- **Step-by-step Claude Code setup** on the Claude page (macOS / Windows / Linux): create a key, trust NginxUI's certificate, add the server, check it. Every command is ready to copy with your key and address already filled in.
+- **Live connection check**: the guide shows what actually reached NginxUI from your computer (connected, certificate not trusted, no key, unknown or expired key) and what to do about each.
+- NginxUI's certificate can be downloaded from /nginxui.pem, and a button makes a new certificate that covers the address you're using (then restarts NginxUI).
+- New installs get a certificate clients can trust: marked as its own authority, for web servers, covering every server address and hostname.local, 825 days.
+- Claude Code keys are added with --scope user, so NginxUI works in every folder.
+
 ## 1.2.1 — 2026-11-20
 - NginxUI updates are part of the main update flow: one Check looks for Ubuntu, nginx and NginxUI updates, and "Choose what to install" has an "Also update NginxUI" option (on by default) that runs last, after the system updates.
 - The task output window folds away: it's open while a task runs, folds up when it finishes, and the last task's output stays one tap away.

@@ -1094,7 +1094,15 @@ ACT.secFix = async (el) => {
 ACT.secIgnore = async (el) => { renderSecurity(await api("/api/security/ignore", { id: el.dataset.id, ignore: el.dataset.v === "1" })); };
 
 // ------------------------------------------------------------------ claude (MCP)
-async function pgClaude() { renderClaude(await api("/api/claude")); }
+async function pgClaude() {
+  const [d, ci] = await Promise.all([api("/api/claude"), api(`/api/claude/certinfo?host=${encodeURIComponent(location.host)}`).catch(() => ({ tls: false }))]);
+  S.certInfo = ci;
+  renderClaude(d);
+  every(3000, async () => {
+    if (S.page !== "claude" || S.claudeTab !== "code" || !$("#ccLive")) return;
+    try { S.ccAttempts = (await api("/api/claude/attempts")).attempts; $("#ccLive").innerHTML = ccLiveHtml(); } catch (e) { /* ignore */ }
+  });
+}
 
 function renderClaude(d) {
   if (S.page !== "claude") return;
@@ -1112,12 +1120,7 @@ function renderClaude(d) {
         : `<p class="small muted">Approving a Claude connection needs your NginxUI password <b>and</b> a code from an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password, Authy…).</p><div id="totpBox"><button class="btn primary" data-act="totpNew">Set up authenticator</button></div>`}</div>
     <div class="spacer"></div><div class="card"><h3>Step 2 · Connect Claude</h3>
       <div class="tabs row" style="gap:6px;margin-bottom:12px"><button class="btn sm ${S.claudeTab !== "code" ? "primary" : ""}" data-act="claudeTab" data-t="app">Claude app</button><button class="btn sm ${S.claudeTab === "code" ? "primary" : ""}" data-act="claudeTab" data-t="code">Claude Code</button></div>
-      ${S.claudeTab === "code" ? `
-        <p class="small muted">Make a key for Claude Code (terminal). It's shown once.</p>
-        <div class="grid g3"><label class="f"><span>Name</span><input type="text" id="tkName" value="Claude Code"></label>
-        <label class="f"><span>Access</span><select id="tkLevel">${Object.entries(d.levels).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select></label>
-        <label class="f"><span>For how long</span><select id="tkHours">${Object.entries(d.durations).map(([k, v]) => `<option value="${k}" ${k == 8 ? "selected" : ""}>${v}</option>`).join("")}</select></label></div>
-        <button class="btn primary" data-act="tokenNew">Create key</button><div id="tkOut"></div>`
+      ${S.claudeTab === "code" ? `<div id="ccGuide">${claudeCodeGuide(d)}</div>`
       : `<ol class="small" style="padding-left:18px;line-height:1.7"><li>In Claude, open <b>Settings → Connectors → Add custom connector</b>.</li><li>Paste this address and press <b>Connect</b>:</li></ol>
         <div class="row" style="flex-wrap:nowrap"><div class="out grow" style="padding:8px 10px">${esc(d.url)}</div>${copyBtn(d.url)}</div>
         <ol class="small" start="3" style="padding-left:18px;line-height:1.7"><li>An NginxUI page opens. Sign in, type your authenticator code, and choose what Claude may do and for how long.</li></ol>
@@ -1159,12 +1162,111 @@ ACT.totpConfirm = async () => { try { renderClaude(await api("/api/claude/totp/c
 ACT.tokenNew = async () => {
   try {
     const r = await api("/api/claude/token", { name: $("#tkName").value, level: $("#tkLevel").value, hours: +$("#tkHours").value });
-    $("#tkOut").innerHTML = `<div class="spacer"></div><div class="banner good small">Key created. Copy it now; it won't be shown again.</div>
-      <p class="small">Run this on the computer where you use Claude Code:</p><div class="out">${esc(r.command)}</div><div class="row" style="margin-top:6px">${copyBtn(r.command, "Copy command")}</div>
-      <p class="small muted">If Claude Code can't reach the address, publish NginxUI through nginx with a real certificate (Claude app tab), then make a new key.</p>`;
-    const d = await api("/api/claude"); S.claude = d;
+    S.ccKey = r.token; S.ccKeyName = $("#tkName").value.trim() || "Claude Code"; S.ccKeyAt = Date.now() / 1000;
+    S.claude = await api("/api/claude");
+    $("#ccGuide").innerHTML = claudeCodeGuide(S.claude);
+    toast("Key created and filled into the steps below");
   } catch (e) { toast(e.message, true); }
 };
+ACT.ccOS = (el) => { S.ccOS = el.dataset.os; $("#ccGuide").innerHTML = claudeCodeGuide(S.claude); };
+ACT.certRemake = async () => {
+  if (!(await confirmBox("Make a new certificate?", `<p>NginxUI makes a new certificate that covers <b>${esc(location.hostname)}</b> plus this server's name and addresses, then restarts (a few seconds).</p><p class="small muted">Any computer that already trusts the old certificate has to download the new one (step 2 again).</p>`, "Make new certificate"))) return;
+  try {
+    await api("/api/claude/cert/remake", { host: location.hostname });
+    $("#page").insertAdjacentHTML("afterbegin", `<div class="banner info">Restarting with the new certificate… your browser may ask you to accept it again.</div>`);
+    setTimeout(() => location.reload(), 4000);
+  } catch (e) { toast(e.message, true); }
+};
+
+function ccDetectOS() {
+  const ua = navigator.userAgent;
+  return /Windows/.test(ua) ? "win" : /Mac|iPhone|iPad/.test(ua) ? "mac" : "linux";
+}
+function cmdBlock(text, note) {
+  return `<div class="out mono" style="margin-top:6px">${esc(text)}</div><div class="row" style="margin-top:4px">${note ? `<span class="small muted grow">${note}</span>` : `<span class="grow"></span>`}${copyBtn(text)}</div>`;
+}
+function ccStep(n, title, body, done) {
+  return `<div class="ccstep"><div class="ccnum ${done ? "done" : ""}">${done ? "✓" : n}</div><div class="grow" style="min-width:0"><b>${title}</b><div class="small" style="margin-top:4px">${body}</div></div></div>`;
+}
+const CC_RESULT = {
+  ok: ["good", "Connected", "Claude Code reached NginxUI with a valid key. You're done."],
+  tls: ["bad", "Certificate not trusted", "The computer reached NginxUI but refused its certificate. Do step 2, then close the terminal and open a new one before step 3."],
+  no_token: ["bad", "No key sent", "Claude Code connected without the key. Redo step 3 exactly as shown (keep the quotes)."],
+  bad_token: ["bad", "Key not recognised", "The key is wrong, was revoked, or wasn't copied fully. Make a new key in step 1 and redo step 3."],
+  expired: ["warn", "Key expired", "Make a new key in step 1 and redo step 3."],
+  off: ["warn", "Claude access is off", "Turn Claude access on at the top of this page."],
+};
+function ccLiveHtml() {
+  const at = (S.ccAttempts || []);
+  const mine = S.ccKeyAt ? at.filter((a) => a.ts >= S.ccKeyAt - 5) : at;
+  const latest = mine[0];
+  let head;
+  if (!latest) head = `<div class="row" style="gap:10px;flex-wrap:nowrap"><span class="spin"></span><div><b>Waiting for Claude Code…</b><div class="small muted">Run the step 4 command. Anything that reaches NginxUI shows up here within a few seconds.</div></div></div>`;
+  else {
+    const [cls, title, text] = CC_RESULT[latest.result] || ["", latest.result, latest.detail];
+    head = `<div class="banner ${cls}" style="margin:0"><b>${title}</b>${latest.who ? ` as “${esc(latest.who)}”` : ""} <span class="small muted">· from ${esc(latest.ip)} · ${esc(latest.t.slice(11))}</span><div class="small" style="margin-top:4px">${text}</div></div>`;
+  }
+  const rows = at.slice(0, 6).map((a) => { const r = CC_RESULT[a.result] || ["", a.result]; return `<div class="small" style="padding:3px 0"><span class="dot ${r[0]}"></span>${esc(a.t.slice(11))} · ${esc(a.ip)} · ${r[1]}${a.who ? ` (${esc(a.who)})` : ""}${a.count > 1 ? ` ×${a.count}` : ""}</div>`; }).join("");
+  return head + (rows ? `<details style="margin-top:8px"><summary class="small muted" style="cursor:pointer">Everything NginxUI received recently</summary>${rows}</details>` : "");
+}
+
+function claudeCodeGuide(d) {
+  const os = S.ccOS || (S.ccOS = ccDetectOS());
+  const ci = S.certInfo || { tls: false };
+  const url = d.url;
+  const base = location.origin;
+  const custom = !!d.public_url && !url.startsWith(base);
+  const needCert = ci.tls && !custom;
+  const key = S.ccKey || "PASTE-YOUR-KEY-FROM-STEP-1";
+  const term = { mac: "Terminal (Applications › Utilities › Terminal)", win: "PowerShell (Start menu → type PowerShell → open it)", linux: "a terminal" }[os];
+  const profile = os === "mac" ? "~/.zshrc" : "~/.bashrc";
+  const certCmd = os === "win"
+    ? `New-Item -ItemType Directory -Force "$env:USERPROFILE\\.claude" | Out-Null\ncurl.exe -fsSk ${base}/nginxui.pem -o "$env:USERPROFILE\\.claude\\nginxui.pem"\n[Environment]::SetEnvironmentVariable("NODE_EXTRA_CA_CERTS", "$env:USERPROFILE\\.claude\\nginxui.pem", "User")`
+    : `mkdir -p ~/.claude\ncurl -fsSk ${base}/nginxui.pem -o ~/.claude/nginxui.pem\necho 'export NODE_EXTRA_CA_CERTS="$HOME/.claude/nginxui.pem"' >> ${profile}`;
+  const addCmd = `claude mcp remove nginxui --scope user\nclaude mcp add --transport http nginxui ${url} --scope user --header "Authorization: Bearer ${key}"`;
+  const checkVar = os === "win" ? "echo $env:NODE_EXTRA_CA_CERTS" : "echo $NODE_EXTRA_CA_CERTS";
+  const settingsPath = os === "win" ? "%USERPROFILE%\\.claude\\settings.json" : "~/.claude/settings.json";
+  const certPathJson = os === "win" ? "C:\\\\Users\\\\YOU\\\\.claude\\\\nginxui.pem" : "/Users/YOU/.claude/nginxui.pem";
+  let n = 0;
+  const steps = [];
+  steps.push(ccStep(++n, "Create a key for Claude Code", S.ccKey
+    ? `<span style="color:var(--good)">Key “${esc(S.ccKeyName)}” created.</span> It's already filled into the commands below. It is only shown on this page, so finish these steps before leaving. <a href="#" data-act="ccNewKey">Make a different key</a>`
+    : `A key is like a password just for Claude Code. Pick what Claude may do and for how long.
+      <div class="grid g3" style="margin-top:8px"><label class="f"><span>Name</span><input type="text" id="tkName" value="Claude Code (${{ mac: "Mac", win: "Windows", linux: "Linux" }[os]})"></label>
+      <label class="f"><span>Access</span><select id="tkLevel">${Object.entries(d.levels).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select></label>
+      <label class="f"><span>For how long</span><select id="tkHours">${Object.entries(d.durations).map(([k, v]) => `<option value="${k}" ${k == 720 ? "selected" : ""}>${v}</option>`).join("")}</select></label></div>
+      <button class="btn primary" data-act="tokenNew">Create key</button>`, !!S.ccKey));
+  if (needCert) {
+    steps.push(ccStep(++n, "Let Claude Code trust NginxUI's certificate",
+      `NginxUI uses its own certificate, which Claude Code refuses until you tell it to trust it. This is the step that usually goes wrong.
+      ${!ci.host_ok ? `<div class="banner warn small" style="margin-top:8px">NginxUI's certificate doesn't cover <b>${esc(ci.host)}</b>, the address you're using now, so Claude Code will refuse it even after this step. <button class="btn sm" data-act="certRemake" style="margin-left:6px">Fix: make a new certificate</button></div>` : ""}
+      <div style="margin-top:8px">Open ${term} on the computer where you use Claude Code and paste:</div>
+      ${cmdBlock(certCmd, "Downloads the certificate and tells Claude Code to trust it.")}
+      <div style="margin-top:8px"><b>Then close that window and open a new one.</b> Claude Code only reads this setting when a new terminal starts.</div>
+      <details style="margin-top:6px"><summary class="small muted" style="cursor:pointer">Check it worked</summary>In the new window, this should print the certificate's path:${cmdBlock(checkVar)}
+        The certificate's fingerprint should be <span class="mono" style="word-break:break-all">${esc(ci.fingerprint || "")}</span>${os === "win" ? "" : cmdBlock("openssl x509 -in ~/.claude/nginxui.pem -noout -fingerprint -sha256")}</details>`));
+  }
+  steps.push(ccStep(++n, "Add NginxUI to Claude Code",
+    `${needCert ? "In the <b>new</b> window, paste" : `Open ${term} and paste`} both lines. The first one may say it found nothing to remove; that's fine.
+    ${cmdBlock(addCmd, S.ccKey ? "Your key is already in it." : "Do step 1 first: the key goes where it says PASTE-YOUR-KEY.")}`));
+  steps.push(ccStep(++n, "Check the connection",
+    `Paste this. It should list <span class="mono">nginxui</span> with <b>✔ Connected</b>.${cmdBlock("claude mcp list")}
+    <div class="card tight" id="ccLive" style="margin-top:8px">${ccLiveHtml()}</div>`));
+  steps.push(ccStep(++n, "Use it",
+    `Start Claude Code with <span class="mono">claude</span> and ask things like <i>“Use nginxui to find out why my site returns 502”</i> or <i>“Use nginxui to run a security scan and fix what's safe”</i>. Type <span class="mono">/mcp</span> inside Claude Code to see the connection. Changes Claude makes show up on this page for you to keep or revert.`));
+  return `<div class="row" style="gap:6px;margin-bottom:12px"><span class="small muted">This computer runs:</span>${[["mac", "macOS"], ["win", "Windows"], ["linux", "Linux"]].map(([k, l]) => `<button class="btn sm ${os === k ? "primary" : ""}" data-act="ccOS" data-os="${k}">${l}</button>`).join("")}</div>
+    <div class="small muted" style="margin-bottom:10px">Before you start: Claude Code is installed and signed in (<span class="mono">claude --version</span> works), and that computer can open this NginxUI page.</div>
+    ${steps.join("")}
+    <details class="card tight" style="margin-top:12px"><summary><b>Still not working?</b></summary><div class="small" style="margin-top:8px;line-height:1.6">
+      <p><b>“✘ Failed to connect”</b> and step 4 shows <i>Certificate not trusted</i>: step 2 didn't take effect. Open a brand-new terminal and run <span class="mono">${esc(checkVar)}</span>. It must print the certificate path. If you use Claude Code inside the Claude desktop app or as a background agent, also add it to <span class="mono">${esc(settingsPath)}</span>:
+        ${cmdBlock(`{\n  "env": {\n    "NODE_EXTRA_CA_CERTS": "${certPathJson}"\n  }\n}`, "Replace YOU with your username. Merge it into the file if it already has other settings.")}</p>
+      <p><b>“✘ Failed to connect”</b> and step 4 shows <i>nothing at all</i>: the computer isn't reaching NginxUI. Open <span class="mono">${esc(base)}</span> in a browser on that computer. If that fails too, it's the network or the firewall on the server (<span class="mono">sudo ufw allow from 192.168.0.0/16 to any port ${esc(String(d.port))} proto tcp</span>).</p>
+      <p><b>“! Needs authentication”</b> or <i>No key sent</i>: the key didn't make it into the command. Redo step 3 and keep the quotes around <span class="mono">"Authorization: Bearer …"</span>.</p>
+      <p><b>Key not recognised / expired</b>: make a new key in step 1 (Make a different key) and redo step 3.</p>
+      <p><b>See exactly what Claude Code is doing</b>: run <span class="mono">claude --debug</span>, then look in the newest file in <span class="mono">~/.claude/debug/</span>. With step 2 working, it contains a line starting <span class="mono">CA certs: Appended extra certificates from NODE_EXTRA_CA_CERTS</span>.</p>
+    </div></details>`;
+}
+ACT.ccNewKey = () => { S.ccKey = null; S.ccKeyAt = null; $("#ccGuide").innerHTML = claudeCodeGuide(S.claude); };
 ACT.revoke = async (el) => { if (!(await confirmBox("Disconnect?", "Claude loses access right away.", "Disconnect", true))) return; renderClaude(await api("/api/claude/revoke", { id: el.dataset.id })); };
 ACT.reviewDo = async (el) => {
   const rev = el.dataset.a === "revert";

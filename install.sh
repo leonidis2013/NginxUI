@@ -114,11 +114,15 @@ fi
 if [[ $TLS -eq 1 && ! -f "$ETC/tls/nginxui.crt" ]]; then
   c "Creating a self-signed HTTPS certificate for the web UI"
   mkdir -p "$ETC/tls"
-  IP=$(hostname -I 2>/dev/null | awk '{print $1}')
-  openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+  SAN="DNS:$(hostname),DNS:$(hostname).local,DNS:localhost,IP:127.0.0.1"
+  for ip in $(hostname -I 2>/dev/null); do [[ $ip == fe80* ]] || SAN="$SAN,IP:$ip"; done
+  openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
     -keyout "$ETC/tls/nginxui.key" -out "$ETC/tls/nginxui.crt" \
     -subj "/CN=$(hostname)" \
-    -addext "subjectAltName=DNS:$(hostname),DNS:localhost${IP:+,IP:$IP},IP:127.0.0.1" >/dev/null 2>&1
+    -addext "subjectAltName=$SAN" \
+    -addext "basicConstraints=critical,CA:TRUE" \
+    -addext "keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign" \
+    -addext "extendedKeyUsage=serverAuth" >/dev/null 2>&1
   chmod 600 "$ETC/tls/nginxui.key"
 fi
 

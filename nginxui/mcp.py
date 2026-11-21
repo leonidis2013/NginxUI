@@ -23,6 +23,7 @@ import time
 from urllib.parse import parse_qs, urlencode, urlparse
 
 SRV = None  # the server module, set by init()
+ATTEMPTS = []  # recent connection attempts (memory only) so the owner can see what reached NginxUI
 LOCK = threading.RLock()
 CODES = {}  # OAuth authorization codes (memory only, 10 min)
 PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
@@ -116,6 +117,32 @@ def new_grant(name, level, hours, via):
         save(st)
     SRV.audit("owner", "claude-connect", f"{name} ({LEVELS[level]}, {DURATIONS.get(hours, f'{hours}h')})")
     return tok, gid
+
+
+def log_attempt(ip, result, detail="", who=""):
+    """result: ok | tls | no_token | bad_token | expired | off | bad_request"""
+    now = time.time()
+    with LOCK:
+        last = ATTEMPTS[0] if ATTEMPTS else None
+        if last and last["ip"] == ip and last["result"] == result and last["who"] == who and now - last["ts"] < 600:
+            last["count"] += 1
+            last["ts"] = now
+            last["t"] = SRV.now_iso()
+            return
+        ATTEMPTS.insert(0, {"t": SRV.now_iso(), "ts": now, "ip": ip, "result": result, "detail": detail[:200],
+                            "who": who, "count": 1})
+        del ATTEMPTS[40:]
+
+
+def token_problem(token):
+    """Why a token was refused: 'no_token', 'expired' or 'bad_token'."""
+    if not token:
+        return "no_token"
+    s = sha(token)
+    for g in state()["grants"].values():
+        if hmac.compare_digest(g["token_sha"], s):
+            return "expired"
+    return "bad_token"
 
 
 def grant_for(token):
@@ -391,7 +418,9 @@ def _unauth(h, msg="Authorization required"):
 
 def handle_mcp(h, method, u):
     st = state()
+    ip = SRV.client_ip(h)
     if not st["enabled"]:
+        log_attempt(ip, "off")
         return h._json(404, {"error": "Claude access (MCP) is turned off in NginxUI"})
     if method != "POST":
         return h._send(405, b"", "text/plain", {"Allow": "POST"})
@@ -399,7 +428,11 @@ def handle_mcp(h, method, u):
     tok = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
     gid, grant = grant_for(tok)
     if not grant:
-        return _unauth(h, "Missing, expired or revoked token")
+        why = token_problem(tok)
+        log_attempt(ip, why, auth[:7] + "…" if auth else "no Authorization header")
+        return _unauth(h, {"no_token": "No key was sent", "expired": "This key has expired",
+                           "bad_token": "Unknown key (revoked, or copied wrong)"}[why])
+    log_attempt(ip, "ok", "", grant["name"])
     n = int(h.headers.get("Content-Length") or 0)
     if n > 4_000_000:
         return h._json(413, {"error": "too large"})

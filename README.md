@@ -2,7 +2,7 @@
 
 A web UI for an nginx reverse proxy on Ubuntu. Manage configs safely, set up new sites with guided wizards, see where traffic goes, read logs and stats, and keep Ubuntu and nginx up to date — all from a browser.
 
-Version 1.2.0 · runs as a native systemd service · no dependencies beyond the Python 3 that ships with Ubuntu.
+Version 1.3.0 · runs as a native systemd service · no dependencies beyond the Python 3 that ships with Ubuntu.
 
 ## What it does
 
@@ -62,7 +62,7 @@ Avoid exposing the NginxUI port to the internet; it can change your proxy and in
 Turn it on in **Claude** in the sidebar, then set up an authenticator app (Google/Microsoft Authenticator, 1Password, …).
 
 - **Claude app (phone, web, desktop):** Settings → Connectors → Add custom connector → paste `https://<your-nginxui-domain>/mcp`. An NginxUI page opens; sign in with your password **and** authenticator code, then choose *Look only* or *Look and change config* and how long (1 hour – 30 days). The Claude app connects from Anthropic's cloud, so NginxUI must be published through nginx on a domain with a real certificate — the **Publish NginxUI with a wizard** button sets that up.
-- **Claude Code:** create a key on the Claude Code tab and run the `claude mcp add …` command it shows.
+- **Claude Code:** open **Claude → Connect Claude → Claude Code** and follow the numbered steps for your computer (macOS, Windows or Linux): create a key, trust NginxUI's certificate (download from `/nginxui.pem` and point `NODE_EXTRA_CA_CERTS` at it), add the server with `claude mcp add … --scope user`, then `claude mcp list`. The page shows live what reached NginxUI, so you can see whether the certificate, the key or the network is the problem.
 
 Claude gets 21 tools: overview, configs, full `nginx -T`, config test, traffic flow with backend health, backend checks, stats, logs, security scan, certificates, history, wizard previews — and with change access: save/create/enable/restore configs, apply wizards, reload. Every change is tested with `nginx -t` (rolled back if it fails), goes live, and is listed on the Claude page for you to **Keep** or **Revert**. Claude can't delete files, install updates or restart the server. Disconnect any connection at any time.
 
