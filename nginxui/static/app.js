@@ -129,7 +129,7 @@ function renderSetup() {
 const PAGES = [
   ["dashboard", "Dashboard", "◉"], ["configs", "Configs", "≣"], ["wizards", "Wizards", "✦"],
   ["flow", "Traffic Flow", "⇄"], ["stats", "Stats", "▤"], ["logs", "Logs", "☰"],
-  ["security", "Security", "⛨"], ["updates", "Updates", "⟳"], ["backups", "Backups", "⛁"],
+  ["security", "Security", "⛨"], ["fail2ban", "Fail2ban", "⊘"], ["updates", "Updates", "⟳"], ["backups", "Backups", "⛁"],
   ["claude", "Claude", "✳"], ["settings", "Settings", "⚙"],
 ];
 
@@ -158,7 +158,7 @@ function route() {
   $("#ptitle").textContent = PAGES.find((p) => p[0] === page)[1];
   $("#pactions").innerHTML = "";
   $("#page").innerHTML = `<div class="empty">Loading…</div>`;
-  const fn = { dashboard: pgDashboard, configs: pgConfigs, wizards: pgWizards, flow: pgFlow, stats: pgStats, logs: pgLogs, updates: pgUpdates, security: pgSecurity, claude: pgClaude, backups: pgBackups, settings: pgSettings }[page];
+  const fn = { dashboard: pgDashboard, configs: pgConfigs, wizards: pgWizards, flow: pgFlow, stats: pgStats, logs: pgLogs, updates: pgUpdates, security: pgSecurity, fail2ban: pgFail2ban, claude: pgClaude, backups: pgBackups, settings: pgSettings }[page];
   fn(decodeURIComponent(parts.slice(1).join("/"))).catch((e) => { $("#page").innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; });
 }
 
@@ -1293,6 +1293,111 @@ ACT.publishSelf = () => {
   api("/api/certs").then((c) => { S.wiz.certs = c.certs; }).catch(() => {});
   location.hash = "#/wizards/proxy";
   toast("Enter a domain for NginxUI, then pick its certificate on the next step");
+};
+
+// ------------------------------------------------------------------ fail2ban
+async function pgFail2ban() {
+  renderF2b(await api("/api/fail2ban"));
+  every(20000, async () => { if (S.page === "fail2ban" && !$(".f2b-editing:focus-within")) { try { renderF2b(await api("/api/fail2ban")); } catch (e) { /* ignore */ } } });
+}
+function renderF2b(d) {
+  if (S.page !== "fail2ban") return;
+  S.f2b = d;
+  if (!d.installed) {
+    $("#page").innerHTML = `<div class="updflow"><div class="card"><div style="font-size:20px;font-weight:650">fail2ban isn't installed</div>
+      <p class="small muted">fail2ban watches logs and blocks addresses that keep failing logins or scanning for weak spots. Install it on the server, then come back here.</p>
+      ${cmdBlock("sudo apt install fail2ban")}</div></div>`;
+    return;
+  }
+  const live = d.jails.filter((j) => j.on);
+  const blocked = [];
+  live.forEach((j) => (j.banned || []).forEach((ip) => blocked.push({ ip, jail: j.name })));
+  const dot = d.running ? "good" : "bad";
+  const head = d.running ? `fail2ban is running` : `fail2ban is ${esc(d.service || "stopped")}`;
+  const sub = d.running ? `${d.banned_now} address${d.banned_now === 1 ? "" : "es"} blocked right now · ${live.length} jail${live.length === 1 ? "" : "s"} on${d.version ? ` · ${esc(d.version)}` : ""}` : "Nothing is being blocked.";
+  const btns = d.running ? `<button class="btn sm" data-act="f2bSvc" data-a="reload">Reload</button><button class="btn sm danger" data-act="f2bSvc" data-a="stop">Stop</button>` : `<button class="btn primary" data-act="f2bSvc" data-a="start">Start</button>`;
+  let meBox = "";
+  if (d.me_banned_in && d.me_banned_in.length) meBox = `<div class="banner bad row between"><span><b>Your address (${esc(d.me)}) is blocked</b> in ${esc(d.me_banned_in.join(", "))}.</span><button class="btn sm" data-act="f2bUnbanMe">Unblock me</button></div>`;
+  else if (d.me && !d.me_ignored) meBox = `<div class="banner warn"><b>You could lock yourself out.</b> You're connecting from <span class="mono">${esc(d.me)}</span>, which isn't on the never-block list. A few wrong passwords from here could get you blocked.
+      <div class="row" style="margin-top:8px">${d.me_net ? `<button class="btn sm primary" data-act="f2bIgnoreAdd" data-net="${esc(d.me_net)}">Never block my network (${esc(d.me_net)})</button>` : ""}<button class="btn sm" data-act="f2bIgnoreAdd" data-net="${esc(d.me)}">Just this address</button></div></div>`;
+  const jailOpts = live.map((j) => `<option value="${esc(j.name)}">${esc(j.title)} (${esc(j.name)})</option>`).join("");
+  const jailRow = (j) => {
+    const t = j.settings || {};
+    return `<div class="f2bjail"><div class="row" style="flex-wrap:nowrap;align-items:flex-start;gap:12px">
+      <label class="toggle" style="margin-top:2px"><input type="checkbox" data-chg="f2bJail" data-j="${esc(j.name)}" ${j.on ? "checked" : ""} ${d.running ? "" : "disabled"}><span></span></label>
+      <div class="grow" style="min-width:0"><b>${esc(j.title)}</b> <span class="mono small muted">${esc(j.name)}</span>
+        ${j.desc ? `<div class="small muted">${esc(j.desc)}</div>` : ""}
+        ${j.on ? `<div class="small" style="margin-top:4px">${j.banned_now ? `<b style="color:var(--warn)">${j.banned_now} blocked now</b>` : "0 blocked now"} · ${j.banned_total} blocked in total · ${j.failed_now} recent failure${j.failed_now === 1 ? "" : "s"}${d.found && d.found[j.name] ? ` · ${d.found[j.name]} noticed in the log` : ""}</div>` : ""}
+        <details class="f2b-editing" style="margin-top:6px"><summary class="small muted" style="cursor:pointer">Settings${j.on && j.maxretry ? `: block after ${esc(j.maxretry)} tries within ${fmtSecs(j.findtime)}, for ${fmtSecs(j.bantime)}` : ""}</summary>
+          <div class="grid g3" style="margin-top:8px">
+            <label class="f"><span>Block after this many tries</span><input type="number" min="1" max="100" data-k="maxretry" value="${esc(t.maxretry || "")}" placeholder="${esc(j.maxretry || "5")}"></label>
+            <label class="f"><span>…within</span><input type="text" data-k="findtime" value="${esc(t.findtime || "")}" placeholder="${esc(j.findtime ? fmtSecs(j.findtime, true) : "10m")}"></label>
+            <label class="f"><span>Block for</span><input type="text" data-k="bantime" value="${esc(t.bantime || "")}" placeholder="${esc(j.bantime ? fmtSecs(j.bantime, true) : "10m")}"></label></div>
+          <div class="row between"><span class="small muted">Times like 10m, 1h, 1d, 1w. Block for -1 means forever. Leave empty for fail2ban's default.</span><button class="btn sm primary" data-act="f2bJailSave" data-j="${esc(j.name)}">Save</button></div>
+        </details></div></div></div>`;
+  };
+  $("#page").innerHTML = `<div class="updflow">
+    <div class="card row between"><div class="row" style="gap:14px;flex-wrap:nowrap;min-width:0"><span class="dot ${dot}" style="width:14px;height:14px;flex:none"></span><div><div style="font-size:20px;font-weight:650">${head}</div><div class="small muted">${sub}</div></div></div><div class="row">${btns}</div></div>
+    <div class="spacer"></div>${meBox}
+    <div class="card"><div class="row between"><h3 style="margin:0">Blocked right now</h3>${blocked.length > 1 ? `<button class="btn sm" data-act="f2bUnbanAll">Unblock all</button>` : ""}</div><div class="spacer"></div>
+      ${blocked.length ? `<div class="tablewrap"><table><tr><th>Address</th><th>Blocked by</th><th></th></tr>${blocked.map((b) => `<tr><td class="mono">${esc(b.ip)}${b.ip === d.me ? ' <span class="badge bad">you</span>' : ""}</td><td class="small">${esc((d.jails.find((j) => j.name === b.jail) || {}).title || b.jail)}</td><td style="text-align:right"><button class="btn sm" data-act="f2bUnban" data-ip="${esc(b.ip)}" data-j="${esc(b.jail)}">Unblock</button></td></tr>`).join("")}</table></div>`
+        : `<div class="small muted">Nobody is blocked right now.</div>`}
+      ${live.length ? `<details style="margin-top:12px"><summary class="small muted" style="cursor:pointer">Block an address yourself</summary>
+        <div class="row" style="margin-top:8px"><input type="text" id="f2bBanIp" placeholder="203.0.113.7" style="flex:1;min-width:140px"><select id="f2bBanJail" style="width:auto">${jailOpts}</select><button class="btn danger" data-act="f2bBan">Block</button></div>
+        <div class="small muted" style="margin-top:4px">It stays blocked for that jail's block time.</div></details>` : ""}</div>
+    <div class="spacer"></div>
+    <div class="card"><h3>What fail2ban watches</h3>${d.running ? "" : `<div class="banner warn small">Start fail2ban to turn jails on or off.</div>`}${d.jails.map(jailRow).join("")}</div>
+    <div class="spacer"></div>
+    <div class="card"><h3>Never block</h3><p class="small muted" style="margin-top:0">Addresses and networks here are never blocked, whatever they do. Put your home or church network here.</p>
+      <div class="row" style="gap:6px">${(d.ignoreip || []).map((n) => `<span class="chip mono">${esc(n)}${["127.0.0.1/8", "::1"].includes(n) ? "" : ` <button class="chipx" data-act="f2bIgnoreDel" data-net="${esc(n)}" title="Remove">×</button>`}</span>`).join("")}</div>
+      <div class="row" style="margin-top:10px;flex-wrap:nowrap"><input type="text" id="f2bIgnNew" placeholder="192.168.1.0/24 or one address"><button class="btn" data-act="f2bIgnoreAdd">Add</button></div></div>
+    <div class="spacer"></div>
+    <details class="card"><summary><h3 style="display:inline">Recent activity</h3> <span class="small muted">${d.log.length} event${d.log.length === 1 ? "" : "s"} · tap to show</span></summary><div class="spacer"></div>
+      ${d.log.length ? d.log.slice(0, 40).map((e) => `<div class="small" style="padding:3px 0"><span class="muted mono">${esc(e.t)}</span> <span class="badge ${/Ban/.test(e.action) && e.action !== "Unban" ? "bad" : "good"}">${esc(e.action.toLowerCase())}</span> <span class="mono">${esc(e.ip)}</span> · ${esc(e.jail)}</div>`).join("") : `<div class="small muted">No blocks or unblocks in fail2ban's log yet.</div>`}</details>
+    <p class="small muted">NginxUI keeps its fail2ban settings in <span class="mono">/etc/fail2ban/jail.d/zz-nginxui.local</span>. Every change is tested with fail2ban first and undone if fail2ban doesn't accept it.</p></div>`;
+}
+function fmtSecs(v, short) {
+  const n = parseInt(v, 10);
+  if (isNaN(n)) return v || "?";
+  if (n < 0) return "forever";
+  const u = [[604800, "w", "week"], [86400, "d", "day"], [3600, "h", "hour"], [60, "m", "minute"]].find(([s]) => n >= s && n % s === 0);
+  if (!u) return short ? `${n}s` : `${n} seconds`;
+  const c = n / u[0];
+  return short ? `${c}${u[1]}` : `${c} ${u[2]}${c === 1 ? "" : "s"}`;
+}
+async function f2bCall(path, body, okMsg) {
+  try { renderF2b(await api(path, body)); if (okMsg) toast(okMsg); return true; }
+  catch (e) { if (e.data && e.data.test_output) showApplyError(e, "fail2ban didn't accept that"); else toast(e.message, true); return false; }
+}
+ACT.f2bSvc = async (el) => {
+  const a = el.dataset.a;
+  if (a === "stop" && !(await confirmBox("Stop fail2ban?", "Everyone it has blocked is let back in, and nothing new gets blocked until you start it again.", "Stop", true))) return;
+  el.disabled = true; await f2bCall("/api/fail2ban/service", { action: a }, `fail2ban ${a === "stop" ? "stopped" : a === "start" ? "started" : "reloaded"}`); el.disabled = false;
+};
+ACT.f2bUnban = (el) => f2bCall("/api/fail2ban/unban", { ip: el.dataset.ip, jail: el.dataset.j }, `Unblocked ${el.dataset.ip}`);
+ACT.f2bUnbanMe = () => Promise.all(S.f2b.me_banned_in.map((j) => api("/api/fail2ban/unban", { ip: S.f2b.me, jail: j }))).then(() => pgFail2ban()).catch((e) => toast(e.message, true));
+ACT.f2bUnbanAll = async () => { if (await confirmBox("Unblock everyone?", "Every address fail2ban is blocking right now is let back in.", "Unblock all", true)) f2bCall("/api/fail2ban/unban", { all: true }, "Everyone unblocked"); };
+ACT.f2bBan = () => f2bCall("/api/fail2ban/ban", { ip: $("#f2bBanIp").value, jail: $("#f2bBanJail").value }, "Blocked");
+CHG.f2bJail = async (el) => {
+  const ok = await f2bCall("/api/fail2ban/jail", { jail: el.dataset.j, enabled: el.checked }, `${el.dataset.j} ${el.checked ? "on" : "off"}`);
+  if (!ok) el.checked = !el.checked;
+};
+ACT.f2bJailSave = (el) => {
+  const box = el.closest("details"), body = { jail: el.dataset.j };
+  $$("[data-k]", box).forEach((i) => { body[i.dataset.k] = i.value.trim(); });
+  f2bCall("/api/fail2ban/jail", body, "Saved");
+};
+ACT.f2bIgnoreAdd = (el) => {
+  const net = el.dataset.net || $("#f2bIgnNew").value.trim();
+  f2bCall("/api/fail2ban/ignore", { net }, `${net} will never be blocked`);
+};
+ACT.f2bIgnoreDel = async (el) => {
+  try { renderF2b(await api("/api/fail2ban/ignore", { net: el.dataset.net, remove: true })); toast("Removed"); }
+  catch (e) {
+    if (e.data && e.data.self && await confirmBox("Remove your own network?", "You're connecting from inside it. Without it, a few wrong passwords from here could get you blocked.", "Remove anyway", true))
+      f2bCall("/api/fail2ban/ignore", { net: el.dataset.net, remove: true, confirm_self: true }, "Removed");
+    else if (!(e.data && e.data.self)) toast(e.message, true);
+  }
 };
 
 boot();

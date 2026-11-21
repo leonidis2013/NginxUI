@@ -2,7 +2,7 @@
 
 A web UI for an nginx reverse proxy on Ubuntu. Manage configs safely, set up new sites with guided wizards, see where traffic goes, read logs and stats, and keep Ubuntu and nginx up to date — all from a browser.
 
-Version 1.3.0 · runs as a native systemd service · no dependencies beyond the Python 3 that ships with Ubuntu.
+Version 1.4.0 · runs as a native systemd service · no dependencies beyond the Python 3 that ships with Ubuntu.
 
 ## What it does
 
@@ -18,6 +18,7 @@ Version 1.3.0 · runs as a native systemd service · no dependencies beyond the 
 | **Updates** | Check for Ubuntu updates, then install **security only**, **nginx only**, or **everything**. Before installing it backs up `/etc/nginx`; apt is told to keep your config files; afterwards nginx is tested and restarted if needed. Shows when a reboot is required (with a guarded reboot button) and toggles Ubuntu's automatic security updates. |
 | **Backups** | Snapshot the whole `/etc/nginx` folder, download it, or restore it (restores are tested too, and roll back on failure). Automatic backup before every update and restore. |
 | **Security** | One scan of nginx, certificates, Ubuntu and recent traffic. Every finding says why it matters and how to fix it, with copy-ready commands and a one-tap fix where it's safe (hide nginx version, modern TLS only, automatic updates, file permissions). Mark findings as OK to hide them. |
+| **Fail2ban** | Start/stop/reload fail2ban, see who's blocked and unblock them (or block an address yourself), turn jails on and off — SSH, website password prompts, scanners looking for weak spots (NginxUI's own filter), missing-page hunters, malformed requests, repeat offenders — and set tries / time window / block time for each. A never-block list (with a one-tap "never block my network") keeps you from locking yourself out. Settings live in `/etc/fail2ban/jail.d/zz-nginxui.local`; every change is tested with `fail2ban-client -t` and undone if fail2ban rejects it. |
 | **Claude** | Built-in MCP server so Claude can troubleshoot and tune your proxy. See below. |
 | **Settings** | Users, password change, full activity log. |
 
@@ -64,7 +65,7 @@ Turn it on in **Claude** in the sidebar, then set up an authenticator app (Googl
 - **Claude app (phone, web, desktop):** Settings → Connectors → Add custom connector → paste `https://<your-nginxui-domain>/mcp`. An NginxUI page opens; sign in with your password **and** authenticator code, then choose *Look only* or *Look and change config* and how long (1 hour – 30 days). The Claude app connects from Anthropic's cloud, so NginxUI must be published through nginx on a domain with a real certificate — the **Publish NginxUI with a wizard** button sets that up.
 - **Claude Code:** open **Claude → Connect Claude → Claude Code** and follow the numbered steps for your computer (macOS, Windows or Linux): create a key, trust NginxUI's certificate (download from `/nginxui.pem` and point `NODE_EXTRA_CA_CERTS` at it), add the server with `claude mcp add … --scope user`, then `claude mcp list`. The page shows live what reached NginxUI, so you can see whether the certificate, the key or the network is the problem.
 
-Claude gets 21 tools: overview, configs, full `nginx -T`, config test, traffic flow with backend health, backend checks, stats, logs, security scan, certificates, history, wizard previews — and with change access: save/create/enable/restore configs, apply wizards, reload. Every change is tested with `nginx -t` (rolled back if it fails), goes live, and is listed on the Claude page for you to **Keep** or **Revert**. Claude can't delete files, install updates or restart the server. Disconnect any connection at any time.
+Claude gets 23 tools: overview, configs, full `nginx -T`, config test, traffic flow with backend health, backend checks, stats, logs, security scan, fail2ban status, certificates, history, wizard previews — and with change access: save/create/enable/restore configs, apply wizards, reload, unblock an address in fail2ban. Every change is tested with `nginx -t` (rolled back if it fails), goes live, and is listed on the Claude page for you to **Keep** or **Revert**. Claude can't delete files, install updates or restart the server. Disconnect any connection at any time.
 
 ## Settings file
 
@@ -107,6 +108,7 @@ nginxui/nginxconf.py     nginx config parser (flow map) and wizard generator
 nginxui/stats.py         access-log stats and log tailing
 nginxui/security.py      security scan
 nginxui/mcp.py           built-in MCP server + OAuth approval for Claude
+nginxui/f2b.py           fail2ban management
 nginxui/static/          web UI (HTML, CSS, JS — no external files)
 ```
 

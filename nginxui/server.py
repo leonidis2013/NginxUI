@@ -32,8 +32,9 @@ import nginxconf  # noqa: E402
 import stats  # noqa: E402
 import security  # noqa: E402
 import mcp  # noqa: E402
+import f2b  # noqa: E402
 
-VERSION = "1.3.1"
+VERSION = "1.4.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
 CONFIG_PATH = os.environ.get("NGINXUI_CONFIG", "/etc/nginxui/nginxui.json")
@@ -1483,7 +1484,8 @@ def security_scan():
     ctx = {"cfg": CFG, "run": lambda cmd, t=30: run(cmd, timeout=t), "files": files, "path_to_fid": path_to_fid,
            "nginx_version": nginx_version_tuple(), "updates": jload(UPD_PATH, {}), "system": system_info(),
            "auto": auto_upgrades_state(), "listening": listening_ports(), "ssh": ssh_config(),
-           "listdir": safe_listdir, "mcp": {"enabled": st["enabled"], "totp": st["totp_confirmed"]}}
+           "listdir": safe_listdir, "mcp": {"enabled": st["enabled"], "totp": st["totp_confirmed"]},
+           "f2b": {"installed": bool(f2b.client()), "running": f2b.running(), "jails": f2b.jail_list()}}
     findings, passed = security.Scan(ctx).run()
     ignored = set(jload(os.path.join(DATA, "security_ignore.json"), []))
     for f in findings:
@@ -1965,6 +1967,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 mcp.init(sys.modules[__name__])
+f2b.init(sys.modules[__name__])
+ROUTES.update({k: (v, True) for k, v in f2b.ROUTES.items()})
 
 
 def main():

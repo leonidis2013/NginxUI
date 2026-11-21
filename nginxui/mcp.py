@@ -265,6 +265,11 @@ TOOLS = [
              "filter": {"type": "string"}}, ["file"])),
     ("run_security_scan", "read", "Run the NginxUI security scan (nginx, TLS, certificates, Ubuntu, exposed services, "
      "recent attack traffic) and return all findings.", _s("")),
+    ("get_fail2ban_status", "read", "fail2ban: running state, jails with failure/ban counts and settings, "
+     "currently blocked addresses, the never-block list and recent ban/unban events. Check this when a visitor "
+     "says they can't reach a site.", _s("")),
+    ("fail2ban_unban", "change", "Unblock an address that fail2ban blocked in one jail.",
+     _s("", {"ip": {"type": "string"}, "jail": {"type": "string"}, "note": {"type": "string"}}, ["ip", "jail", "note"])),
     ("list_certificates", "read", "Let's Encrypt certificates on this server and their expiry.", _s("")),
     ("get_config_history", "read", "Saved versions of a config file.", _s("", {"id": ID}, ["id"])),
     ("read_config_version", "read", "Content of one saved version.",
@@ -299,7 +304,7 @@ INSTRUCTIONS = (
     "Every change is tested with nginx -t and rolled back automatically if it fails; changes that pass go live and "
     "the owner keeps or reverts them in NginxUI, so explain each change in the note. Never weaken security "
     "(do not remove allow/deny rules, auth_basic, or HTTPS redirects) unless the owner asked. "
-    "You cannot delete files, install updates or reboot; ask the owner to do that in NginxUI.")
+    "You cannot delete files, install updates, reboot or block addresses; ask the owner to do that in NginxUI.")
 
 
 def _dump(obj, limit=120_000):
@@ -355,6 +360,10 @@ def call_tool(name, args, gid, grant):
         r = SRV.security_scan()
         return _dump({"findings": [{k: v for k, v in f.items() if not k.startswith("_")} for f in r["findings"]],
                       "passed": r["passed"]})
+    if name == "get_fail2ban_status":
+        o = SRV.f2b.overview(None)
+        o.pop("me", None)
+        return _dump(o)
     if name == "list_certificates":
         return _dump(SRV.list_certs())
     if name == "get_config_history":
@@ -367,6 +376,10 @@ def call_tool(name, args, gid, grant):
                                                  "params": a.get("params") or {}}, who)["content"]
     # ---- change tools
     note = (a.get("note") or "").strip() or "No reason given"
+    if name == "fail2ban_unban":
+        SRV.f2b.api_unban(None, {}, {"ip": a.get("ip", ""), "jail": a.get("jail", "")}, who)
+        SRV.audit(who, "fail2ban-unban-reason", f"{a.get('ip')}: {note}")
+        return f"Unblocked {a.get('ip')} in {a.get('jail')}."
     if name == "reload_nginx":
         return _dump(SRV.api_nginx_reload(None, {}, {}, who))
     if name in ("save_config", "restore_config_version", "set_config_enabled"):

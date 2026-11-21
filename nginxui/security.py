@@ -364,14 +364,29 @@ class Scan:
                                   "sudo systemctl restart ssh")
             else:
                 self.ok("system", "SSH only accepts keys")
-        if not shutil.which("fail2ban-client"):
+        fb = self.c.get("f2b") or {}
+        if not fb.get("installed"):
             self.add("fail2ban", "low", "system", "Nothing blocks repeated login guesses",
                      "fail2ban is not installed.",
                      "fail2ban watches logs and temporarily blocks addresses that keep failing SSH or website password prompts.",
-                     "Install it. The default setup protects SSH right away.",
+                     "Install it, then manage it on NginxUI's Fail2ban page.",
                      commands="sudo apt install fail2ban")
+        elif not fb.get("running"):
+            self.add("fail2ban", "medium", "system", "fail2ban is installed but not running",
+                     "It isn't blocking anything right now.",
+                     "Password guessing and scanners go unchecked until it's running again.",
+                     "Start it on the Fail2ban page.", link={"page": "fail2ban"})
         else:
-            self.ok("system", "fail2ban is installed")
+            web = [j for j in fb.get("jails", []) if j.startswith("nginx")]
+            if not web:
+                self.add("fail2ban_web", "low", "system", "fail2ban only watches SSH, not your websites",
+                         "Running jails: " + (", ".join(fb.get("jails", [])) or "none"),
+                         "Turning on the website jails blocks password guessing on your sites and the scanners "
+                         "that show up in your logs.",
+                         "Turn on 'Website password prompts' and 'Scanners looking for weak spots' on the Fail2ban page.",
+                         link={"page": "fail2ban"})
+            else:
+                self.ok("system", f"fail2ban is running ({len(fb.get('jails', []))} jails)")
 
         # listening services
         risky, others = [], []
@@ -448,7 +463,8 @@ class Scan:
             self.add("bruteforce", "medium", "traffic", f"{len(guessers)} address(es) hit password prompts repeatedly",
                      ", ".join(f"{ip} ({n} refused)" for ip, n in sorted(guessers, key=lambda x: -x[1])[:6]),
                      "Many 401/403 replies from one address usually means someone is guessing passwords.",
-                     "Block the address in the firewall, add an IP allow list to the site, or install fail2ban.",
+                     "Block the address on the Fail2ban page, add an IP allow list to the site, or turn on the fail2ban "
+                     "'Website password prompts' jail so this is handled automatically.", link={"page": "fail2ban"},
                      commands="\n".join(f"sudo ufw deny from {ip}" for ip, _ in sorted(guessers, key=lambda x: -x[1])[:6]))
         if paths and not guessers:
             self.ok("traffic", "No password guessing seen in the last 24 hours")

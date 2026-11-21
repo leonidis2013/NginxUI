@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.0 — 2026-11-21
+- **Fail2ban page**: service status with start/stop/reload; everyone blocked right now with Unblock / Unblock all, and block an address yourself (refuses your own address and anything on the never-block list); jails with on/off switches, live counts and per-jail settings (tries, time window, block time); never-block list with one-tap "never block my network"; recent ban/unban activity.
+- Ready-made jails: SSH, website password prompts, scanners looking for weak spots (new NginxUI filter on the access logs), missing-page hunters, malformed requests (when available), repeat offenders. Website jails read every site's own log (`/var/log/nginx/*error.log` / `*access.log`).
+- Settings are written to `/etc/fail2ban/jail.d/zz-nginxui.local`, tested with `fail2ban-client -t`, and rolled back if fail2ban rejects them or fails to reload.
+- Security scan: flags fail2ban installed-but-stopped and fail2ban watching only SSH, and points password-guessing findings at the Fail2ban page.
+- Claude (MCP): new `get_fail2ban_status` and `fail2ban_unban` tools.
+
 ## 1.3.1 — 2026-11-21
 - Fix: Claude Code failed with "HTTP 400 … Bad request syntax". When NginxUI answered a request early (for example 401 for a wrong key) it didn't read the request body, so the next request on the same connection was garbled. NginxUI now always reads the whole request first.
 - Claude Code guide: the step 3 command only appears once you have a key (no more copying the placeholder), and the new key survives a page reload in that browser tab.

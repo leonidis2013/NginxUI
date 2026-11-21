@@ -257,3 +257,9 @@ details.finding summary::before, details.finding[open] summary::before { content
 .ccnum.done { background: var(--accent); color: #06231c; border-color: var(--accent); }
 .spin { flex: none; width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+/* fail2ban */
+.f2bjail { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.f2bjail:last-child { border-bottom: 0; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 20px; background: var(--panel2); border: 1px solid var(--line); font-size: 12.5px; }
+.chipx { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 15px; padding: 0 2px; line-height: 1; }
+.chipx:hover { color: var(--bad); }
