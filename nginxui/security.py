@@ -176,6 +176,29 @@ class Scan:
         if servers and not (redirect_missing or plain_auth):
             self.ok("tls", "HTTPS sites redirect plain-HTTP visitors")
 
+        # Cloudflare in front of nginx
+        cf = self.c.get("cloudflare") or {}
+        fb = self.c.get("f2b") or {}
+        if cf.get("in_use"):
+            web_jails = [j for j in fb.get("jails", []) if j.startswith("nginx")]
+            if web_jails and not fb.get("ignore_cloudflare") and not cf.get("realip"):
+                self.add("cf_f2b", "high", "nginx", "fail2ban could block Cloudflare itself",
+                         "Your sites use a Cloudflare certificate, so visitors arrive from Cloudflare's servers, and "
+                         f"fail2ban is watching website logs ({', '.join(web_jails)}).",
+                         "One bad visitor could get a Cloudflare server blocked, and then everyone who comes through "
+                         "that server can't reach your sites.",
+                         "Tell fail2ban to never block Cloudflare's servers.", fix_action="f2b_ignore_cloudflare",
+                         link={"page": "certificates"})
+            if not cf.get("realip"):
+                self.add("cf_realip", "medium", "nginx", "Logs show Cloudflare instead of your real visitors",
+                         "Sites behind Cloudflare see Cloudflare's address for every visitor.",
+                         "Stats, logs, IP allow lists and fail2ban all see Cloudflare's address instead of the "
+                         "real visitor, so allow lists can't tell people apart and bans hit the wrong address.",
+                         "Turn on 'Show real visitor addresses' for Cloudflare.", fix_action="cloudflare_realip",
+                         link={"page": "certificates"})
+            else:
+                self.ok("nginx", "Real visitor addresses are restored for Cloudflare traffic")
+
         # autoindex
         ai = [(f, d) for f, t in trees for d, _ in _walk(t) if d["name"] == "autoindex" and d["args"][:1] == ["on"]]
         if ai:

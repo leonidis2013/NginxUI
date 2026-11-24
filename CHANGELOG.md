@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.0 — 2026-11-23
+- **Certificates page**: every certificate on the server (Let's Encrypt, Cloudflare Origin, used by nginx, found under /etc/ssl) with covered names, issuer, expiry and key check. **Add a certificate** by pasting it or choosing files, with Cloudflare Origin step-by-step help; NginxUI checks the key matches and stores it root-only in /etc/nginx/nginxui-certs (included in backups). Unused added certificates can be removed.
+- **Wizard HTTPS step** lists all certificates, marks the ones that cover your domain, lets you paste a new one without leaving the wizard, warns when the names don't match, and explains Cloudflare's orange cloud / Full (strict) when you pick an Origin certificate. Typing file paths by hand is still there.
+- **Cloudflare**: "Show real visitor addresses" (Cloudflare's published ranges + CF-Connecting-IP, refreshed from cloudflare.com with a built-in fallback) and "fail2ban: never block Cloudflare".
+- Security scan: warns when fail2ban could block Cloudflare's servers, and when logs show Cloudflare instead of real visitors, with one-tap fixes.
+- Claude (MCP): list_certificates now covers every certificate and the Cloudflare settings.
+
 ## 1.4.0 — 2026-11-21
 - **Fail2ban page**: service status with start/stop/reload; everyone blocked right now with Unblock / Unblock all, and block an address yourself (refuses your own address and anything on the never-block list); jails with on/off switches, live counts and per-jail settings (tries, time window, block time); never-block list with one-tap "never block my network"; recent ban/unban activity.
 - Ready-made jails: SSH, website password prompts, scanners looking for weak spots (new NginxUI filter on the access logs), missing-page hunters, malformed requests (when available), repeat offenders. Website jails read every site's own log (`/var/log/nginx/*error.log` / `*access.log`).

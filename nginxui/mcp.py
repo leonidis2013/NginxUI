@@ -270,7 +270,9 @@ TOOLS = [
      "says they can't reach a site.", _s("")),
     ("fail2ban_unban", "change", "Unblock an address that fail2ban blocked in one jail.",
      _s("", {"ip": {"type": "string"}, "jail": {"type": "string"}, "note": {"type": "string"}}, ["ip", "jail", "note"])),
-    ("list_certificates", "read", "Let's Encrypt certificates on this server and their expiry.", _s("")),
+    ("list_certificates", "read", "All certificates on this server (Let's Encrypt, Cloudflare Origin, added in "
+     "NginxUI, used by nginx): names covered, issuer, expiry, whether the key matches, and whether Cloudflare real "
+     "visitor addresses are on.", _s("")),
     ("get_config_history", "read", "Saved versions of a config file.", _s("", {"id": ID}, ["id"])),
     ("read_config_version", "read", "Content of one saved version.",
      _s("", {"id": ID, "version": {"type": "string"}}, ["id", "version"])),
@@ -365,7 +367,7 @@ def call_tool(name, args, gid, grant):
         o.pop("me", None)
         return _dump(o)
     if name == "list_certificates":
-        return _dump(SRV.list_certs())
+        return _dump({"certs": SRV.certs.discover(), "cloudflare": SRV.certs.cf_state()})
     if name == "get_config_history":
         return _dump(SRV.api_history(None, {"id": a.get("id", "")}, {}, who))
     if name == "read_config_version":

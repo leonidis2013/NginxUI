@@ -2,7 +2,7 @@
 
 A web UI for an nginx reverse proxy on Ubuntu. Manage configs safely, set up new sites with guided wizards, see where traffic goes, read logs and stats, and keep Ubuntu and nginx up to date — all from a browser.
 
-Version 1.4.0 · runs as a native systemd service · no dependencies beyond the Python 3 that ships with Ubuntu.
+Version 1.5.0 · runs as a native systemd service · no dependencies beyond the Python 3 that ships with Ubuntu.
 
 ## What it does
 
@@ -12,6 +12,7 @@ Version 1.4.0 · runs as a native systemd service · no dependencies beyond the 
 | **Configs** | Edit every file in `sites-available`, `conf.d`, `snippets` and `nginx.conf` with syntax colors. Turn sites on/off with a switch. **Every save is tested with `nginx -t` first; if the test or reload fails, the old file is put back automatically** and the error line is highlighted. |
 | **History** | Every save is kept (60 versions per file), plus the original file from before NginxUI touched it. Compare any version with a diff and restore it with one tap. Deleted files can be restored too. |
 | **Wizards** | Reverse proxy, load balancer, static website, redirect. Asks plain questions (domain, where the app is, HTTPS certificate, IP allow list, password prompt, WebSockets, upload size…), shows the finished config, then applies it safely. |
+| **Certificates** | Every certificate on the server in one list — Let's Encrypt, Cloudflare Origin, ones used by nginx, and ones found under `/etc/ssl` — with the names each covers, expiry and whether its key matches. Add a certificate by pasting it (e.g. a Cloudflare Origin certificate and its private key) or choosing the files; NginxUI checks the key belongs to the certificate and stores both under `/etc/nginx/nginxui-certs` (root-only, included in backups). Cloudflare switches: **Show real visitor addresses** (`set_real_ip_from` Cloudflare's ranges + `CF-Connecting-IP`) and **fail2ban: never block Cloudflare**. |
 | **Traffic Flow** | Grouped by config file. A live map: visitors → ports → sites → backends. Line thickness shows requests in the last 5 minutes; every backend is checked and shown green (answering) or red (down). Tap anything for details. |
 | **Stats** | Requests over time, 4xx/5xx errors, status codes, top visitors, top pages, top clients — from the access logs. Optional live connection counter (nginx `stub_status`, local-only). |
 | **Logs** | Tail any nginx log with a filter and follow mode; errors and 4xx/5xx lines are colored. |
@@ -95,7 +96,7 @@ Data lives in `/var/lib/nginxui` (users, history, backups, activity log).
 - Stats read nginx's standard `combined` log format. Sites made with a wizard get their own access log, so the Traffic Flow map can count requests per site; sites sharing one log show "shared log".
 - Wizards write `http2 on;` on nginx 1.25.1+ and the older `listen … http2` form on earlier versions, and skip IPv6 listeners if IPv6 is turned off.
 - Password prompts made by wizards are stored in `/etc/nginx/nginxui-htpasswd/<site>`.
-- HTTPS for sites uses certificates already on the server (Let's Encrypt certificates in `/etc/letsencrypt/live` are listed automatically). Getting certificates with certbot is not built in yet.
+- HTTPS for sites uses certificates on the server: the wizard lists every one it finds (marking the ones that cover your domain) and lets you paste a new one, such as a Cloudflare Origin certificate. Getting certificates with certbot is not built in yet.
 - NginxUI runs as root because it edits `/etc/nginx`, reloads nginx and runs apt.
 
 ## Files
@@ -109,6 +110,7 @@ nginxui/stats.py         access-log stats and log tailing
 nginxui/security.py      security scan
 nginxui/mcp.py           built-in MCP server + OAuth approval for Claude
 nginxui/f2b.py           fail2ban management
+nginxui/certs.py         certificates and Cloudflare
 nginxui/static/          web UI (HTML, CSS, JS — no external files)
 ```
 

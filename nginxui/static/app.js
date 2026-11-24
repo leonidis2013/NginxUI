@@ -128,7 +128,7 @@ function renderSetup() {
 
 const PAGES = [
   ["dashboard", "Dashboard", "◉"], ["configs", "Configs", "≣"], ["wizards", "Wizards", "✦"],
-  ["flow", "Traffic Flow", "⇄"], ["stats", "Stats", "▤"], ["logs", "Logs", "☰"],
+  ["certificates", "Certificates", "⚿"], ["flow", "Traffic Flow", "⇄"], ["stats", "Stats", "▤"], ["logs", "Logs", "☰"],
   ["security", "Security", "⛨"], ["fail2ban", "Fail2ban", "⊘"], ["updates", "Updates", "⟳"], ["backups", "Backups", "⛁"],
   ["claude", "Claude", "✳"], ["settings", "Settings", "⚙"],
 ];
@@ -158,7 +158,7 @@ function route() {
   $("#ptitle").textContent = PAGES.find((p) => p[0] === page)[1];
   $("#pactions").innerHTML = "";
   $("#page").innerHTML = `<div class="empty">Loading…</div>`;
-  const fn = { dashboard: pgDashboard, configs: pgConfigs, wizards: pgWizards, flow: pgFlow, stats: pgStats, logs: pgLogs, updates: pgUpdates, security: pgSecurity, fail2ban: pgFail2ban, claude: pgClaude, backups: pgBackups, settings: pgSettings }[page];
+  const fn = { dashboard: pgDashboard, configs: pgConfigs, wizards: pgWizards, flow: pgFlow, stats: pgStats, logs: pgLogs, updates: pgUpdates, security: pgSecurity, fail2ban: pgFail2ban, certificates: pgCertificates, claude: pgClaude, backups: pgBackups, settings: pgSettings }[page];
   fn(decodeURIComponent(parts.slice(1).join("/"))).catch((e) => { $("#page").innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; });
 }
 
@@ -492,7 +492,7 @@ async function pgWizards(arg) {
   if (!S.wiz || S.wiz.type !== arg) {
     S.wiz = { type: arg, step: 0, name: "", nameTouched: false, enable: true, overwrite: false,
       p: { ssl: "none", force_https: true, http2: true, hsts: false, websocket: true, max_body_mb: 10, timeout: 60, method: "round_robin", code: 301, keep_path: true, basic_auth_users: [], max_fails: 3, fail_timeout: 30 } };
-    try { S.wiz.certs = (await api("/api/certs")).certs; } catch (e) { S.wiz.certs = []; }
+    try { const c = await api("/api/certs"); S.wiz.certs = c.certs; S.wiz.cfRealip = c.cloudflare.realip; } catch (e) { S.wiz.certs = []; }
   }
   renderWizard();
 }
@@ -528,10 +528,17 @@ function renderWizard() {
   } else if (w.step === 1) {
     body += wf("ssl", "HTTPS", { type: "select", options: [["none", "No HTTPS (plain HTTP only)"], ["existing", "Use a certificate already on this server"]] });
     if (p.ssl === "existing") {
-      if (w.certs.length) body += `<label class="f"><span>Let's Encrypt certificates found</span><select data-act="noop" data-chg="pickCert"><option value="">Choose…</option>${w.certs.map((c, i) => `<option value="${i}">${esc(c.name)}${c.days_left != null ? ` · expires in ${c.days_left} days` : ""}</option>`).join("")}</select></label>`;
-      else body += `<div class="banner info small">No Let's Encrypt certificates were found in /etc/letsencrypt/live. Enter the file paths below, or get one first with certbot (e.g. <span class="mono">sudo certbot certonly --webroot -w /var/www/html -d ${esc((p.domains || "app.example.com").split(/[\s,]+/)[0])}</span>).</div>`;
-      body += wf("ssl_cert", "Certificate file (fullchain)", { ph: "/etc/letsencrypt/live/example.com/fullchain.pem" });
-      body += wf("ssl_key", "Private key file", { ph: "/etc/letsencrypt/live/example.com/privkey.pem" });
+      const doms = (p.domains || "").split(/[\s,]+/).filter(Boolean);
+      const cov = (c) => doms.length > 0 && doms.every((dn) => c.names.some((n) => n.toLowerCase() === dn.toLowerCase() || (n.startsWith("*.") && dn.split(".").length === n.split(".").length && dn.toLowerCase().endsWith(n.slice(1).toLowerCase()))));
+      const list = (w.certs || []).filter((c) => c.key).map((c) => ({ ...c, fits: cov(c) })).sort((a, b) => b.fits - a.fits);
+      const sel = list.find((c) => c.cert === p.ssl_cert);
+      body += `<label class="f"><span>Certificate</span><select data-act="noop" data-chg="pickCert"><option value="">${list.length ? "Choose a certificate…" : "No certificates on this server yet"}</option>
+        ${list.map((c) => `<option value="${esc(c.cert)}" ${p.ssl_cert === c.cert ? "selected" : ""}>${c.fits ? "✓ " : ""}${esc(c.name)} · ${CERT_KIND[c.kind][0]} · ${esc(c.names.slice(0, 2).join(", "))}${c.days_left != null && c.days_left < 60 ? ` · ${c.days_left} days left` : ""}</option>`).join("")}</select>
+        <div class="hint">✓ means it covers ${doms.length ? esc(doms.join(", ")) : "the domain you entered"}.</div></label>
+        <div class="row" style="margin-bottom:12px"><button class="btn sm" data-act="wizCertAdd">+ Add a certificate (paste from Cloudflare)</button><a class="small" href="#/certificates" style="margin-left:8px">Manage certificates</a></div>`;
+      if (sel && !sel.fits) body += `<div class="banner warn small">This certificate doesn't cover ${esc(doms.join(", "))}. Browsers will show a warning unless the names match.</div>`;
+      if (sel && sel.kind === "cloudflare") body += `<div class="banner info small"><b>Cloudflare Origin certificate:</b> only Cloudflare trusts it, so keep this domain <b>proxied</b> (orange cloud) and set Cloudflare's SSL/TLS mode to <b>Full (strict)</b>.${w.cfRealip === false ? ` <div style="margin-top:6px">Logs will show Cloudflare instead of your visitors. <button class="btn sm" data-act="wizCfRealip">Show real visitor addresses</button></div>` : ""}</div>`;
+      body += `<details style="margin-bottom:12px" ${!sel && p.ssl_cert ? "open" : ""}><summary class="small muted" style="cursor:pointer">Or type the file paths by hand</summary><div style="margin-top:8px">${wf("ssl_cert", "Certificate file (fullchain)", { ph: "/etc/ssl/example/cert.pem" })}${wf("ssl_key", "Private key file", { ph: "/etc/ssl/example/key.pem" })}</div></details>`;
       body += wf("force_https", "Send HTTP visitors to HTTPS", { type: "check" });
       body += wf("http2", "Turn on HTTP/2", { type: "check" });
       body += wf("hsts", "HSTS (tell browsers to always use HTTPS)", { type: "check", hint: "Only turn on once HTTPS works - browsers remember it for a year." });
@@ -576,9 +583,15 @@ function wizSet(el) {
   if (k === "ssl") renderWizard();
 }
 CHG.pickCert = (el) => {
-  const c = S.wiz.certs[+el.value]; if (!c) return;
+  const c = (S.wiz.certs || []).find((x) => x.cert === el.value);
+  if (!c) { S.wiz.p.ssl_cert = ""; S.wiz.p.ssl_key = ""; renderWizard(); return; }
   S.wiz.p.ssl_cert = c.cert; S.wiz.p.ssl_key = c.key; renderWizard();
 };
+ACT.wizCertAdd = () => certAddModal((r) => {
+  S.wiz.certs = r.certs; S.wiz.cfRealip = r.cloudflare.realip;
+  S.wiz.p.ssl_cert = r.cert; S.wiz.p.ssl_key = r.key; renderWizard(); toast("Certificate added and selected");
+});
+ACT.wizCfRealip = async () => { try { await api("/api/cloudflare/realip", { enabled: true }); S.wiz.cfRealip = true; renderWizard(); toast("Real visitor addresses on"); } catch (e) { showApplyError(e); } };
 ACT.addAuth = () => { S.wiz.p.basic_auth_users.push({ user: "", password: "" }); renderWizard(); };
 ACT.delAuth = (el) => { S.wiz.p.basic_auth_users.splice(+el.dataset.i, 1); renderWizard(); };
 ACT.wizBack = () => { S.wiz.step = Math.max(0, S.wiz.step - 1); renderWizard(); };
@@ -1349,7 +1362,7 @@ function renderF2b(d) {
     <div class="card"><h3>What fail2ban watches</h3>${d.running ? "" : `<div class="banner warn small">Start fail2ban to turn jails on or off.</div>`}${d.jails.map(jailRow).join("")}</div>
     <div class="spacer"></div>
     <div class="card"><h3>Never block</h3><p class="small muted" style="margin-top:0">Addresses and networks here are never blocked, whatever they do. Put your home or church network here.</p>
-      <div class="row" style="gap:6px">${(d.ignoreip || []).map((n) => `<span class="chip mono">${esc(n)}${["127.0.0.1/8", "::1"].includes(n) ? "" : ` <button class="chipx" data-act="f2bIgnoreDel" data-net="${esc(n)}" title="Remove">×</button>`}</span>`).join("")}</div>
+      <div class="row" style="gap:6px">${d.ignore_cloudflare ? `<span class="chip">Cloudflare's servers <a href="#/certificates" class="small" style="margin-left:4px">change</a></span>` : ""}${(d.ignoreip || []).map((n) => `<span class="chip mono">${esc(n)}${["127.0.0.1/8", "::1"].includes(n) ? "" : ` <button class="chipx" data-act="f2bIgnoreDel" data-net="${esc(n)}" title="Remove">×</button>`}</span>`).join("")}</div>
       <div class="row" style="margin-top:10px;flex-wrap:nowrap"><input type="text" id="f2bIgnNew" placeholder="192.168.1.0/24 or one address"><button class="btn" data-act="f2bIgnoreAdd">Add</button></div></div>
     <div class="spacer"></div>
     <details class="card"><summary><h3 style="display:inline">Recent activity</h3> <span class="small muted">${d.log.length} event${d.log.length === 1 ? "" : "s"} · tap to show</span></summary><div class="spacer"></div>
@@ -1399,5 +1412,85 @@ ACT.f2bIgnoreDel = async (el) => {
     else if (!(e.data && e.data.self)) toast(e.message, true);
   }
 };
+
+// ------------------------------------------------------------------ certificates
+const CERT_KIND = { cloudflare: ["Cloudflare Origin", "info"], letsencrypt: ["Let's Encrypt", "good"], "self-signed": ["Self-signed", "warn"], other: ["Other", ""] };
+const CERT_SRC = { nginxui: "added in NginxUI", letsencrypt: "Let's Encrypt folder", "in use": "used by nginx", found: "found on this server" };
+function certExpiry(c) {
+  if (c.days_left == null) return "";
+  const cls = c.days_left < 0 ? "bad" : c.days_left < 14 ? "bad" : c.days_left < 30 ? "warn" : "";
+  const txt = c.days_left < 0 ? `expired ${-c.days_left} days ago` : c.days_left > 730 ? `good until ${c.expires}` : `expires in ${c.days_left} days`;
+  return cls ? `<span class="badge ${cls}">${txt}</span>` : `<span class="small muted">${txt}</span>`;
+}
+async function pgCertificates() {
+  $("#pactions").innerHTML = `<button class="btn primary" data-act="certAddOpen">Add a certificate</button>`;
+  const [d, fb] = await Promise.all([api("/api/certs"), api("/api/fail2ban").catch(() => ({ installed: false }))]);
+  renderCerts(d, fb);
+}
+function renderCerts(d, fb) {
+  if (S.page !== "certificates") return;
+  S.certs = d; if (fb) S.f2bLite = fb; fb = S.f2bLite || {};
+  const cfInUse = d.certs.some((c) => c.kind === "cloudflare");
+  const row = (c) => `<div class="certrow"><div class="row between" style="flex-wrap:nowrap;align-items:flex-start;gap:10px">
+      <div style="min-width:0"><b>${esc(c.name)}</b> <span class="badge ${CERT_KIND[c.kind][1]}">${CERT_KIND[c.kind][0]}</span>${c.in_use ? ' <span class="badge">in use</span>' : ""}
+        <div class="small" style="margin-top:3px;word-break:break-word">Covers <span class="mono">${esc(c.names.slice(0, 4).join(", "))}${c.names.length > 4 ? ` +${c.names.length - 4}` : ""}</span></div>
+        <div class="small muted" style="margin-top:2px">${certExpiry(c)} · ${esc(CERT_SRC[c.source])} · issued by ${esc(c.issuer)}</div>
+        <div class="small" style="margin-top:2px">${c.key_ok ? '<span style="color:var(--good)">✓ private key found</span>' : `<span style="color:var(--warn)">⚠ ${c.key ? "the key next to it doesn't match" : "no private key found next to it"}</span>`}</div>
+        <details style="margin-top:4px"><summary class="small muted" style="cursor:pointer">File paths</summary><div class="small mono" style="word-break:break-all">${esc(c.cert)}<br>${esc(c.key || "(no key)")}</div></details></div>
+      ${c.removable ? `<button class="btn sm danger" data-act="certDel" data-cert="${esc(c.cert)}">Remove</button>` : ""}</div></div>`;
+  $("#page").innerHTML = `<div class="updflow">
+    <div class="card">${d.certs.length ? d.certs.map(row).join("") : `<div class="empty">No certificates on this server yet.<div class="spacer"></div><button class="btn primary" data-act="certAddOpen">Add a certificate</button></div>`}</div>
+    <div class="spacer"></div>
+    <div class="card"><h3>Cloudflare</h3>
+      <p class="small" style="margin-top:0">If your domains go through Cloudflare (orange cloud in Cloudflare's DNS page), visitors reach this server through Cloudflare's servers.${cfInUse ? "" : " This applies once you use a Cloudflare Origin certificate."}</p>
+      <div class="row between" style="flex-wrap:nowrap;gap:12px;padding:10px 0;border-top:1px solid var(--line)"><div><b>Show real visitor addresses</b><div class="small muted">Logs, stats, IP allow lists and fail2ban see the real visitor instead of Cloudflare.${d.cloudflare.realip ? ` On · ${d.cloudflare.ranges} Cloudflare ranges${d.cloudflare.updated ? ` · updated ${esc(d.cloudflare.updated)}` : ""} <a href="#" data-act="cfRefresh">update now</a>` : ""}</div></div>
+        <label class="toggle"><input type="checkbox" data-chg="cfRealip" ${d.cloudflare.realip ? "checked" : ""}><span></span></label></div>
+      ${fb.installed ? `<div class="row between" style="flex-wrap:nowrap;gap:12px;padding:10px 0;border-top:1px solid var(--line)"><div><b>fail2ban: never block Cloudflare</b><div class="small muted">Stops fail2ban from ever blocking one of Cloudflare's servers, which would cut off everyone coming through it.</div></div>
+        <label class="toggle"><input type="checkbox" data-chg="cfF2b" ${fb.ignore_cloudflare ? "checked" : ""} ${fb.running ? "" : "disabled"}><span></span></label></div>` : ""}
+      <details style="margin-top:6px"><summary class="small muted" style="cursor:pointer">Cloudflare settings that go with this</summary><ul class="small" style="line-height:1.6;padding-left:18px">
+        <li>In Cloudflare, set <b>SSL/TLS → Overview</b> to <b>Full (strict)</b>.</li>
+        <li>Cloudflare Origin certificates are only trusted by Cloudflare. Keep those DNS records <b>proxied</b> (orange cloud); with a grey cloud, browsers will show a certificate warning.</li>
+        <li>fail2ban blocks on this server, but visitors coming through Cloudflare connect from Cloudflare's servers, so a fail2ban block can't stop them. For website attacks, Cloudflare's own firewall and rate limiting work better; fail2ban still protects SSH and anything not behind Cloudflare.</li></ul></details></div></div>`;
+}
+ACT.certAddOpen = () => certAddModal((r) => { toast(`Added ${r.names[0] || "certificate"}`); renderCerts({ certs: r.certs, cloudflare: r.cloudflare }); });
+ACT.certDel = async (el) => {
+  if (!(await confirmBox("Remove this certificate?", "Its files are deleted from the server. No site is using it.", "Remove", true))) return;
+  try { const r = await api("/api/certs/delete", { cert: el.dataset.cert }); renderCerts(r); toast("Removed"); } catch (e) { toast(e.message, true); }
+};
+CHG.cfRealip = async (el) => {
+  try { const r = await api("/api/cloudflare/realip", { enabled: el.checked }); S.certs.cloudflare = r.cloudflare; renderCerts(S.certs); toast(el.checked ? "Real visitor addresses on" : "Turned off"); }
+  catch (e) { el.checked = !el.checked; showApplyError(e); }
+};
+ACT.cfRefresh = async () => { try { const r = await api("/api/cloudflare/realip", { enabled: true }); S.certs.cloudflare = r.cloudflare; renderCerts(S.certs); toast("Cloudflare ranges updated"); } catch (e) { showApplyError(e); } };
+CHG.cfF2b = async (el) => {
+  try { S.f2bLite = await api("/api/fail2ban/ignore-cloudflare", { enabled: el.checked }); renderCerts(S.certs); toast(el.checked ? "fail2ban will never block Cloudflare" : "Turned off"); }
+  catch (e) { el.checked = !el.checked; showApplyError(e, "fail2ban didn't accept that"); }
+};
+
+// shared "add a certificate" box (Certificates page and the wizard)
+function certAddModal(onDone) {
+  const m = modal(`<div class="row between"><h2 style="margin:0">Add a certificate</h2><button class="btn sm" data-act="closeModal">Close</button></div>
+    <details class="card tight" style="margin:12px 0" open><summary><b>Getting a Cloudflare Origin certificate</b></summary><ol class="small" style="line-height:1.7;padding-left:18px;margin-bottom:0">
+      <li>In Cloudflare, open your domain, then <b>SSL/TLS → Origin Server → Create Certificate</b>.</li>
+      <li>Keep the defaults (RSA, your domain and <span class="mono">*.yourdomain</span>, 15 years) and press <b>Create</b>.</li>
+      <li>Copy <b>Origin Certificate</b> into the first box below and <b>Private Key</b> into the second. Cloudflare shows the private key only once; if you've lost it, create a new certificate.</li>
+      <li>Already saved them as files? Use the <b>Choose file</b> buttons instead.</li></ol></details>
+    <label class="f"><span>Name</span><input type="text" id="caName" placeholder="Cloudflare ulickifamily.com"></label>
+    <label class="f"><span>Certificate <span class="muted">(starts with -----BEGIN CERTIFICATE-----)</span></span><textarea id="caCert" rows="6" class="mono" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+      <input type="file" id="caCertFile" accept=".pem,.crt,.cer,.txt" style="margin-top:6px"></label>
+    <label class="f"><span>Private key <span class="muted">(starts with -----BEGIN PRIVATE KEY-----)</span></span><textarea id="caKey" rows="6" class="mono" spellcheck="false" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
+      <input type="file" id="caKeyFile" accept=".pem,.key,.txt" style="margin-top:6px"></label>
+    <div id="caErr"></div>
+    <div class="row between"><span class="small muted">Stored on the server in the nginx folder, readable only by root. Included in NginxUI backups.</span><button class="btn primary" id="caSave">Add certificate</button></div>`, true);
+  const load = (inp, ta) => inp.addEventListener("change", () => { const f = inp.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => { $(ta).value = r.result; }; r.readAsText(f); });
+  load($("#caCertFile", m), "#caCert"); load($("#caKeyFile", m), "#caKey");
+  $("#caSave", m).onclick = async () => {
+    $("#caSave").disabled = true;
+    try {
+      const r = await api("/api/certs/add", { name: $("#caName").value, cert: $("#caCert").value, key: $("#caKey").value });
+      closeModal(); onDone(r);
+    } catch (e) { $("#caErr").innerHTML = `<div class="banner bad small">${esc(e.message)}</div>`; $("#caSave").disabled = false; }
+  };
+}
 
 boot();

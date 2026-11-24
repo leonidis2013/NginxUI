@@ -33,8 +33,9 @@ import stats  # noqa: E402
 import security  # noqa: E402
 import mcp  # noqa: E402
 import f2b  # noqa: E402
+import certs  # noqa: E402
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
 CONFIG_PATH = os.environ.get("NGINXUI_CONFIG", "/etc/nginxui/nginxui.json")
@@ -1485,7 +1486,10 @@ def security_scan():
            "nginx_version": nginx_version_tuple(), "updates": jload(UPD_PATH, {}), "system": system_info(),
            "auto": auto_upgrades_state(), "listening": listening_ports(), "ssh": ssh_config(),
            "listdir": safe_listdir, "mcp": {"enabled": st["enabled"], "totp": st["totp_confirmed"]},
-           "f2b": {"installed": bool(f2b.client()), "running": f2b.running(), "jails": f2b.jail_list()}}
+           "f2b": {"installed": bool(f2b.client()), "running": f2b.running(), "jails": f2b.jail_list(),
+                   "ignore_cloudflare": bool(f2b.state().get("ignore_cloudflare"))},
+           "cloudflare": {"in_use": any(c["kind"] == "cloudflare" and c["in_use"] for c in certs.discover()),
+                          "realip": certs.cf_state()["realip"]}}
     findings, passed = security.Scan(ctx).run()
     ignored = set(jload(os.path.join(DATA, "security_ignore.json"), []))
     for f in findings:
@@ -1548,6 +1552,10 @@ def api_security_fix(h, q, b, user):
         if not ops:
             raise ApiError("Couldn't find a file NginxUI can edit for this. Open the config and change the ssl_protocols line by hand.")
         out = safe_apply(ops, user, "Security fix: modern TLS only", hist)
+    elif act == "cloudflare_realip":
+        out = certs.api_cf_realip(h, q, {"enabled": True}, user)
+    elif act == "f2b_ignore_cloudflare":
+        out = f2b.api_ignore_cloudflare(h, q, {"enabled": True}, user)
     elif act == "auto_updates":
         out = api_updates_auto(h, q, {"enabled": True}, user)
     elif act in ("keyperms", "htpasswdperms"):
@@ -1968,6 +1976,8 @@ class Handler(BaseHTTPRequestHandler):
 
 mcp.init(sys.modules[__name__])
 f2b.init(sys.modules[__name__])
+certs.init(sys.modules[__name__])
+ROUTES.update({k: (v, True) for k, v in certs.ROUTES.items()})
 ROUTES.update({k: (v, True) for k, v in f2b.ROUTES.items()})
 
 

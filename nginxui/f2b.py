@@ -114,6 +114,8 @@ def current_ignore():
         if rc == 0:
             ips = [l.strip(" |`-\t") for l in out.splitlines() if re.search(r"[0-9a-fA-F:.]+/?\d*", l)]
             ips = [x for x in ips if _valid_net(x)]
+            cf = set(SRV.certs.CF_V4 + SRV.certs.CF_V6)
+            ips = [x for x in ips if x not in cf]
             if ips:
                 return sorted(set(ips) | {"127.0.0.1/8", "::1"})
     return ["127.0.0.1/8", "::1"]
@@ -151,8 +153,11 @@ def render(st):
     """The managed jail file, from NginxUI's saved choices."""
     fmt = {"log_dir": SRV.CFG["log_dir"].rstrip("/"), "f2b_log": cfg("fail2ban_log", LOG_FILE)}
     out = ["# Managed by NginxUI. Change these on NginxUI's Fail2ban page; edits here are overwritten.", ""]
-    if st["ignoreip"] is not None:
-        out += ["[DEFAULT]", "ignoreip = " + " ".join(st["ignoreip"]), ""]
+    if st["ignoreip"] is not None or st.get("ignore_cloudflare"):
+        nets = list(st["ignoreip"] if st["ignoreip"] is not None else current_ignore())
+        if st.get("ignore_cloudflare"):
+            nets += [n for n in SRV.certs.CF_V4 + SRV.certs.CF_V6 if n not in nets]
+        out += ["[DEFAULT]", "ignoreip = " + " ".join(nets), ""]
     for name, j in sorted(st["jails"].items()):
         lines = []
         if "enabled" in j:
@@ -235,6 +240,7 @@ def overview(h):
     live = jail_list() if info["running"] else []
     ignore = current_ignore()
     info["ignoreip"] = ignore
+    info["ignore_cloudflare"] = bool(st.get("ignore_cloudflare"))
     info["me_ignored"] = bool(me) and in_ignore(me, ignore)
     if me:
         try:
@@ -365,6 +371,15 @@ def api_ignore(h, q, b, user):
     return overview(h)
 
 
+def api_ignore_cloudflare(h, q, b, user):
+    st = state()
+    if st["ignoreip"] is None:
+        st["ignoreip"] = current_ignore()
+    st["ignore_cloudflare"] = bool(b.get("enabled"))
+    apply(st, user, f"never block Cloudflare {'on' if st['ignore_cloudflare'] else 'off'}")
+    return overview(h)
+
+
 def api_service(h, q, b, user):
     act = b.get("action")
     if act == "reload":
@@ -386,4 +401,5 @@ ROUTES = {
     ("POST", "/api/fail2ban/jail"): api_jail,
     ("POST", "/api/fail2ban/ignore"): api_ignore,
     ("POST", "/api/fail2ban/service"): api_service,
+    ("POST", "/api/fail2ban/ignore-cloudflare"): api_ignore_cloudflare,
 }
